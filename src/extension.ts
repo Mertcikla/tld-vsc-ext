@@ -259,7 +259,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // Stage 2: Create diagram from folder
     vscode.commands.registerCommand('tldiagram.createDiagramFromFolder', async (uri: vscode.Uri) => {
       logger.info('extension', 'Command: createDiagramFromFolder', { path: uri.fsPath })
-      if (!client || !currentOrgId) {
+      if (!client) {
         vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
         return
       }
@@ -295,7 +295,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
             // Phase 2: create diagram + objects
             progress.report({ message: `Creating ${symbols.length} objects…` })
-            const orgId = currentOrgId!
+            const orgId = currentOrgId ?? ''
             const diagramId = await buildDiagramFromSymbols(
               client!,
               folderName,
