@@ -6,7 +6,10 @@
   "publisher": "tldiagramcom",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Visualization"],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {

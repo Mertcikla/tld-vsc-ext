@@ -1,6 +1,8 @@
 import * as vscode from 'vscode'
 import { logger } from './logger'
 import { AuthManager } from './auth/AuthManager'
+import { AuthUriHandler } from './auth/AuthUriHandler'
+import * as crypto from 'crypto'
 import { ExtensionApiClient } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ObjectLibraryTreeProvider } from './tree/ObjectLibraryTreeProvider'
@@ -317,6 +319,29 @@ export function activate(context: vscode.ExtensionContext): void {
             if (newDiagram) {
               const { DiagramTreeItem } = await import('./tree/DiagramTreeItem')
               await webviewManager.openDiagram(new DiagramTreeItem(newDiagram, 0))
+            }
+          } catch (e) {
+            if (e instanceof vscode.CancellationError) {
+              logger.info('extension', 'createDiagramFromFolder: cancelled by user')
+              return
+            }
+            logger.error('extension', 'createDiagramFromFolder failed', { error: String(e) })
+            vscode.window.showErrorMessage(
+              `Failed to create diagram: ${e instanceof Error ? e.message : String(e)}`,
+            )
+          }
+        },
+      )
+    }),
+  )
+
+  logger.info('extension', 'Activation complete')
+}
+
+export function deactivate(): void {
+  logger.info('extension', 'Deactivating')
+}
+ DiagramTreeItem(newDiagram, 0))
             }
           } catch (e) {
             if (e instanceof vscode.CancellationError) {
