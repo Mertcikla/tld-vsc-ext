@@ -23,6 +23,14 @@
         {
           "id": "tldiagram.diagramTree",
           "name": "Diagrams"
+        },
+        {
+          "id": "tldiagram.objectLibrary",
+          "name": "Object Library"
+        },
+        {
+          "id": "tldiagram.diagramObjects",
+          "name": "Diagram Objects"
         }
       ]
     },
@@ -63,6 +71,32 @@
         "command": "tldiagram.openInBrowser",
         "title": "Open in Browser",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "tldiagram.exportDiagram",
+        "title": "tlDiagram: Export Diagram"
+      },
+      {
+        "command": "tldiagram.importDiagram",
+        "title": "tlDiagram: Import Diagram"
+      },
+      {
+        "command": "tldiagram.addObjectToDiagram",
+        "title": "Add to Diagram",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tldiagram.focusObject",
+        "title": "Focus on Canvas"
+      },
+      {
+        "command": "tldiagram.createDiagramFromFolder",
+        "title": "Create tlDiagram from Folder",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "tldiagram.showLogs",
+        "title": "tlDiagram: Show Logs"
       }
     ],
     "menus": {
@@ -98,6 +132,18 @@
           "command": "tldiagram.deleteDiagram",
           "when": "viewItem == diagram",
           "group": "1_modify"
+        },
+        {
+          "command": "tldiagram.addObjectToDiagram",
+          "when": "viewItem == diagObject",
+          "group": "inline"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "tldiagram.createDiagramFromFolder",
+          "when": "explorerResourceIsFolder && tldiagram.authenticated",
+          "group": "tldiagram"
         }
       ]
     },
@@ -108,6 +154,20 @@
           "type": "string",
           "default": "https://tldiagram.com",
           "description": "Base URL of your tlDiagram server (change only for self-hosted instances)"
+        },
+        "tldiagram.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": ["off", "error", "warn", "info", "debug", "trace"],
+          "enumDescriptions": [
+            "No logging",
+            "Errors only",
+            "Errors and warnings",
+            "Normal operational messages (default)",
+            "Verbose: includes API calls, panel lifecycle, tree view updates",
+            "Very verbose: includes every message routed through the bridge and every object created"
+          ],
+          "description": "Controls verbosity of the tlDiagram output channel. Use 'debug' or 'trace' when reporting issues."
         }
       }
     }

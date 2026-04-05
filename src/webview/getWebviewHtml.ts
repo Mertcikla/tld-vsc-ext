@@ -45,6 +45,8 @@ export function getWebviewHtml(
     window.__TLD_API_KEY__ = ${safeApiKey};
     window.__TLD_SERVER_URL__ = ${safeServerUrl};
     window.__TLD_DIAGRAM_ID__ = ${safeDiagramId};
+    window.__TLD_VSCODE__ = true;
+    window.__TLD_VSCODE_API__ = acquireVsCodeApi();
   </script>
   <script nonce="${nonce}" src="${scriptUri}" type="module"></script>
 </body>
