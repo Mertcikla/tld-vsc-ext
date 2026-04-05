@@ -40,7 +40,7 @@
     "commands": [
       {
         "command": "tldiagram.login",
-        "title": "tlDiagram: Connect with API Key"
+        "title": "tlDiagram: Connect / Login"
       },
       {
         "command": "tldiagram.logout",

@@ -27,6 +27,8 @@ export function activate(context: vscode.ExtensionContext): void {
   logger.info('extension', 'Activating', { serverUrl })
 
   const authManager = new AuthManager(context.secrets, serverUrl)
+  const authUriHandler = new AuthUriHandler()
+  context.subscriptions.push(vscode.window.registerUriHandler(authUriHandler))
 
   let client: ExtensionApiClient | undefined
   let currentOrgId: string | undefined
@@ -87,45 +89,60 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('tldiagram.login', async () => {
       logger.debug('extension', 'Command: login')
-      const apiKey = await vscode.window.showInputBox({
-        prompt: 'Paste your tlDiagram API key',
-        placeHolder: 'tld_…',
-        password: true,
-        ignoreFocusOut: true,
-        validateInput: (v) =>
-          v.startsWith('tld_')
-            ? null
-            : 'Key must start with "tld_". Create one at tldiagram.com/settings/api-keys',
-      })
-      if (!apiKey) {
-        logger.debug('extension', 'login: cancelled')
-        return
-      }
+
+      const state = crypto.randomUUID()
+      const loginUrl = vscode.Uri.parse(`${serverUrl}/app/auth/vscode?state=${state}`)
 
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Connecting to tlDiagram…' },
-        async () => {
-          try {
-            logger.info('extension', 'Attempting login with provided API key')
-            const candidateClient = new ExtensionApiClient(serverUrl, apiKey)
-            const user = await candidateClient.getMe()
-            await authManager.storeKey(apiKey)
-            client = candidateClient
-            currentOrgId = user.orgId
-            treeProvider.updateClient(client)
-            objectLibraryTreeProvider.updateClient(client)
-            await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
-            treeProvider.refresh()
-            logger.info('extension', 'Login successful', { username: user.username, orgName: user.orgName })
-            vscode.window.showInformationMessage(
-              `Connected to tlDiagram as ${user.username} (${user.orgName})`,
-            )
-          } catch (e) {
-            logger.error('extension', 'Login failed', { error: String(e) })
-            vscode.window.showErrorMessage(
-              `Invalid or expired API key: ${e instanceof Error ? e.message : String(e)}`,
-            )
-          }
+        { location: vscode.ProgressLocation.Notification, title: 'Connecting to tlDiagram…', cancellable: true },
+        async (progress, token) => {
+          logger.info('extension', 'Opening browser for login')
+          await vscode.env.openExternal(loginUrl)
+
+          return new Promise<void>((resolve, reject) => {
+            const disposable = authUriHandler.onDidAuthenticate(async (event) => {
+              if (event.state !== state) {
+                logger.error('extension', 'Login failed: State mismatch (CSRF protection)')
+                vscode.window.showErrorMessage('Login failed: Security state mismatch.')
+                disposable.dispose()
+                reject(new Error('State mismatch'))
+                return
+              }
+
+              try {
+                const apiKey = event.token
+                logger.info('extension', 'Attempting login with provided token from web')
+                const candidateClient = new ExtensionApiClient(serverUrl, apiKey)
+                const user = await candidateClient.getMe()
+                await authManager.storeKey(apiKey)
+                client = candidateClient
+                currentOrgId = user.orgId
+                treeProvider.updateClient(client)
+                objectLibraryTreeProvider.updateClient(client)
+                await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
+                treeProvider.refresh()
+                logger.info('extension', 'Login successful', { username: user.username, orgName: user.orgName })
+                vscode.window.showInformationMessage(
+                  `Connected to tlDiagram as ${user.username} (${user.orgName})`,
+                )
+                resolve()
+              } catch (e) {
+                logger.error('extension', 'Login failed', { error: String(e) })
+                vscode.window.showErrorMessage(
+                  `Authentication failed: ${e instanceof Error ? e.message : String(e)}`,
+                )
+                reject(e)
+              } finally {
+                disposable.dispose()
+              }
+            })
+
+            token.onCancellationRequested(() => {
+              logger.debug('extension', 'login: cancelled')
+              disposable.dispose()
+              resolve()
+            })
+          })
         },
       )
     }),
@@ -319,29 +336,6 @@ export function activate(context: vscode.ExtensionContext): void {
             if (newDiagram) {
               const { DiagramTreeItem } = await import('./tree/DiagramTreeItem')
               await webviewManager.openDiagram(new DiagramTreeItem(newDiagram, 0))
-            }
-          } catch (e) {
-            if (e instanceof vscode.CancellationError) {
-              logger.info('extension', 'createDiagramFromFolder: cancelled by user')
-              return
-            }
-            logger.error('extension', 'createDiagramFromFolder failed', { error: String(e) })
-            vscode.window.showErrorMessage(
-              `Failed to create diagram: ${e instanceof Error ? e.message : String(e)}`,
-            )
-          }
-        },
-      )
-    }),
-  )
-
-  logger.info('extension', 'Activation complete')
-}
-
-export function deactivate(): void {
-  logger.info('extension', 'Deactivating')
-}
- DiagramTreeItem(newDiagram, 0))
             }
           } catch (e) {
             if (e instanceof vscode.CancellationError) {
