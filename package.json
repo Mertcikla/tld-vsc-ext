@@ -1,0 +1,135 @@
+{
+  "name": "tldiagram",
+  "displayName": "tlDiagram",
+  "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
+  "version": "0.1.0",
+  "publisher": "tldiagramcom",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Visualization"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tldiagram",
+          "title": "tlDiagram",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "tldiagram": [
+        {
+          "id": "tldiagram.diagramTree",
+          "name": "Diagrams"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tldiagram.login",
+        "title": "tlDiagram: Connect with API Key"
+      },
+      {
+        "command": "tldiagram.logout",
+        "title": "tlDiagram: Disconnect"
+      },
+      {
+        "command": "tldiagram.refresh",
+        "title": "tlDiagram: Refresh Diagrams",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "tldiagram.openDiagram",
+        "title": "Open Diagram",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "tldiagram.createDiagram",
+        "title": "tlDiagram: New Diagram",
+        "icon": "$(add)"
+      },
+      {
+        "command": "tldiagram.renameDiagram",
+        "title": "Rename Diagram"
+      },
+      {
+        "command": "tldiagram.deleteDiagram",
+        "title": "Delete Diagram",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "tldiagram.openInBrowser",
+        "title": "Open in Browser",
+        "icon": "$(link-external)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "tldiagram.refresh",
+          "when": "view == tldiagram.diagramTree && tldiagram.authenticated",
+          "group": "navigation"
+        },
+        {
+          "command": "tldiagram.createDiagram",
+          "when": "view == tldiagram.diagramTree && tldiagram.authenticated",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "tldiagram.openDiagram",
+          "when": "viewItem == diagram",
+          "group": "inline"
+        },
+        {
+          "command": "tldiagram.openInBrowser",
+          "when": "viewItem == diagram",
+          "group": "inline"
+        },
+        {
+          "command": "tldiagram.renameDiagram",
+          "when": "viewItem == diagram",
+          "group": "1_modify"
+        },
+        {
+          "command": "tldiagram.deleteDiagram",
+          "when": "viewItem == diagram",
+          "group": "1_modify"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "tlDiagram",
+      "properties": {
+        "tldiagram.serverUrl": {
+          "type": "string",
+          "default": "https://tldiagram.com",
+          "description": "Base URL of your tlDiagram server (change only for self-hosted instances)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile:ext": "node esbuild.mjs",
+    "compile:webview": "cd ../frontend && npm run build:vscode",
+    "compile": "npm run compile:ext && npm run compile:webview",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npm run compile && npx @vscode/vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.11.0",
+    "@connectrpc/connect": "^2.1.1",
+    "@connectrpc/connect-web": "^2.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}
