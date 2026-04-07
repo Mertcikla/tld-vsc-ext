@@ -1,18 +1,11 @@
 import * as vscode from 'vscode'
 import { logger } from '../logger'
-import type { IndexedSymbol } from './FolderIndexer'
+import type { IndexedSymbol } from '../parsing/shared/types'
+import { DEFAULT_IMPORT_ROLE_MAP } from '../parsing/shared/defaultImportRoleMap'
+import { matchArchitecturalRoleHeuristics } from '../parsing/shared/roleHeuristics'
+import type { ArchitecturalRole } from '../parsing/shared/roles'
 import type { ExternalLibrary } from './ImportParser'
-import type { TreeSitterQueryLoader } from './TreeSitterQueryLoader'
-
-export type ArchitecturalRole =
-  | 'api_entry'
-  | 'service'
-  | 'repository'
-  | 'data_exit'
-  | 'model'
-  | 'utility'
-  | 'external'
-  | 'unknown'
+import type { TreeSitterQueryLoader } from '../parsing/treesitter/TreeSitterQueryLoader'
 
 export interface ClassifiedSymbol extends IndexedSymbol {
   role: ArchitecturalRole
@@ -25,53 +18,21 @@ export interface CustomRolePattern {
   role: ArchitecturalRole
 }
 
-// Default path-segment heuristics. Applied only when tree-sitter and import
-// fingerprint produce no result. First match wins.
-const DEFAULT_PATH_RULES: Array<{ segments: string[]; role: ArchitecturalRole }> = [
-  {
-    segments: ['handler', 'controller', 'router', 'route', 'endpoint', 'api', 'rest', 'grpc', 'rpc', 'http', 'server', 'web'],
-    role: 'api_entry',
-  },
-  {
-    segments: ['service', 'svc', 'usecase', 'use_case', 'usecases', 'domain', 'application'],
-    role: 'service',
-  },
-  {
-    segments: ['repository', 'repositories', 'repo', 'store', 'storage', 'dao', 'db', 'database', 'data', 'persistence'],
-    role: 'repository',
-  },
-  {
-    segments: ['migration', 'migrations', 'seed', 'seeds', 'schema', 'schemas', 'query', 'queries'],
-    role: 'data_exit',
-  },
-  {
-    segments: ['model', 'models', 'entity', 'entities', 'dto', 'dtos', 'types', 'type', 'struct', 'structs', 'proto'],
-    role: 'model',
-  },
-  {
-    segments: ['util', 'utils', 'helper', 'helpers', 'lib', 'common', 'shared', 'pkg', 'tools', 'support'],
-    role: 'utility',
-  },
-  {
-    segments: ['middleware', 'middlewares', 'interceptor', 'interceptors', 'filter', 'filters', 'guard', 'guards'],
-    role: 'service',
-  },
-]
-
 /**
  * Classifies IndexedSymbols into ArchitecturalRoles using (in priority order):
  *   1. User custom rules
  *   2. Tree-sitter structural queries (if available)
  *   3. Import fingerprint (which external libs does this file use?)
- *   4. Path segment heuristics
- *   5. SymbolKind fallback
+ *   4. Symbol Name heuristics (LSP fallback)
+ *   5. Path segment heuristics
+ *   6. SymbolKind fallback
  */
 export class RoleClassifier {
   /** filePath (workspace-relative) → role inferred from import analysis */
   private readonly importFingerprint: Map<string, ArchitecturalRole>
 
   constructor(
-    private readonly loader: TreeSitterQueryLoader,
+    private readonly loader: TreeSitterQueryLoader | null,
     private readonly customRules: CustomRolePattern[],
     importFingerprint: Map<string, ArchitecturalRole>,
     private readonly disablePathHeuristics: boolean = false,
@@ -123,7 +84,7 @@ export class RoleClassifier {
     }
 
     // 2. Tree-sitter structural queries
-    if (fileText) {
+    if (fileText && this.loader) {
       const tsRole = await this.loader.runRoleQueries(fileText, langId, sym.startLine)
       if (tsRole) {
         logger.trace('RoleClassifier', 'tree-sitter match', { name: sym.name, role: tsRole })
@@ -138,15 +99,15 @@ export class RoleClassifier {
       return fpRole
     }
 
-    // 4. Path segment heuristics (last resort for when tree-sitter is unavailable)
-    if (!this.disablePathHeuristics) {
-      const dirSegments = pathLower.split(/[/\\]/)
-      for (const rule of DEFAULT_PATH_RULES) {
-        if (dirSegments.some((seg) => rule.segments.some((s) => seg.includes(s)))) {
-          logger.trace('RoleClassifier', 'path heuristic match', { name: sym.name, role: rule.role })
-          return rule.role
-        }
-      }
+    // 4. Symbol name and path heuristics
+    const heuristicMatch = matchArchitecturalRoleHeuristics(sym.name, sym.filePath, this.disablePathHeuristics)
+    if (heuristicMatch) {
+      logger.trace('RoleClassifier', 'heuristic match', {
+        name: sym.name,
+        role: heuristicMatch.role,
+        source: heuristicMatch.source,
+      })
+      return heuristicMatch.role
     }
 
     // 5. SymbolKind fallback
@@ -231,6 +192,9 @@ function langIdFromPath(filePath: string): string {
     cc: 'cpp',
     c: 'c',
     h: 'c',
+    hpp: 'cpp',
+    rb: 'ruby',
+    vue: 'javascript',
   }
   return map[ext] ?? 'plaintext'
 }
@@ -247,58 +211,5 @@ async function readFileText(relPath: string): Promise<string | null> {
   }
 }
 
-/**
- * Default `importRoleMap` shipped with the extension.
- * This is a starting point — users can replace it entirely via settings.
- * Keys are case-insensitive substrings matched against import paths.
- */
-export const DEFAULT_IMPORT_ROLE_MAP: Record<string, ArchitecturalRole> = {
-  // Data layer
-  'sql': 'repository',
-  'postgres': 'repository',
-  'mysql': 'repository',
-  'sqlite': 'repository',
-  'mongodb': 'repository',
-  'redis': 'repository',
-  'prisma': 'repository',
-  'typeorm': 'repository',
-  'sequelize': 'repository',
-  'mongoose': 'repository',
-  'knex': 'repository',
-  'drizzle': 'repository',
-  'gorm': 'repository',
-  'pgx': 'repository',
-  'sqlx': 'repository',
-  'diesel': 'repository',
-  'sqlalchemy': 'repository',
-  'pymongo': 'repository',
-  'dynamodb': 'repository',
-  'cassandra': 'repository',
-  'elasticsearch': 'repository',
-  'neo4j': 'repository',
-  // HTTP / API layer
-  'express': 'api_entry',
-  'fastify': 'api_entry',
-  'koa': 'api_entry',
-  'hapi': 'api_entry',
-  'restify': 'api_entry',
-  'gin': 'api_entry',
-  'echo': 'api_entry',
-  'fiber': 'api_entry',
-  'chi': 'api_entry',
-  'mux': 'api_entry',
-  'flask': 'api_entry',
-  'fastapi': 'api_entry',
-  'django': 'api_entry',
-  'tornado': 'api_entry',
-  'axum': 'api_entry',
-  'actix': 'api_entry',
-  'rocket': 'api_entry',
-  'warp': 'api_entry',
-  'spring': 'api_entry',
-  'jersey': 'api_entry',
-  'grpc': 'api_entry',
-  'connectrpc': 'api_entry',
-  'connect-go': 'api_entry',
-  'twirp': 'api_entry',
-}
+export type { ArchitecturalRole } from '../parsing/shared/roles'
+export { DEFAULT_IMPORT_ROLE_MAP } from '../parsing/shared/defaultImportRoleMap'

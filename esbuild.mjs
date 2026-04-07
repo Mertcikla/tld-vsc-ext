@@ -33,7 +33,7 @@ function copyQueryFiles() {
 const options = {
   entryPoints: {
     extension: 'src/extension.ts',
-    'run-arch-test': '../tests/realworld/test-runner/run-arch-test.ts'
+    'run-arch-test': 'test-runner/run-arch-test.ts',
   },
   bundle: true,
   outdir: 'out',

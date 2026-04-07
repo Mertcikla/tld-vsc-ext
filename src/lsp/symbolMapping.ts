@@ -28,7 +28,7 @@ export function kindToObjectType(kind: vscode.SymbolKind): string {
 }
 
 /** Glob patterns for source files we scan for symbols. */
-export const SOURCE_GLOB = '**/*.{ts,tsx,js,jsx,go,py,rs,java,kt,swift,cpp,cc,cxx,c,h,cs}'
+export const SOURCE_GLOB = '**/*.{ts,tsx,js,jsx,go,py,rs,java,kt,swift,cpp,cc,cxx,c,h,hpp,cs,rb,vue}'
 
 /** Glob patterns to exclude. */
 export const EXCLUDE_GLOB = '**/node_modules/**,**/dist/**,**/build/**,**/out/**,**/.git/**'

@@ -240,6 +240,26 @@
           ],
           "description": "Default abstraction level preset for architecture diagram generation. Can be overridden per-run via the quick pick."
         },
+        "tldiagram.architecture.parserMode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "lsp",
+            "treesitter"
+          ],
+          "enumDescriptions": [
+            "Prefer LSP symbol providers, then fall back to Tree-sitter if needed",
+            "Use VS Code language features first, then fall back to Tree-sitter with a warning",
+            "Use Tree-sitter queries first, then fall back to LSP with a warning"
+          ],
+          "description": "Choose how architecture diagrams are parsed. Auto prefers LSP and falls back when necessary."
+        },
+        "tldiagram.architecture.showParserWarnings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a warning when architecture generation falls back from the requested parser mode to another parser."
+        },
         "tldiagram.architecture.targetObjectsPerDiagram": {
           "type": "number",
           "default": 10,
@@ -345,7 +365,7 @@
     "package": "npm run compile && npx @vscode/vsce package",
     "vscode:prepublish": "npm run compile",
     "test": "vitest run",
-    "arch:parse-local": "node scripts/local-arch-parse.js"
+    "arch:parse-local": "tsx src/parsing/treesitter/localArchitectureCli.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",

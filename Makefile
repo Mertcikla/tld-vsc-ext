@@ -2,4 +2,4 @@
 
 
 test:
-	NODE_PATH=./node_modules node ../tests/realworld/test-runner/run-local-arch-benchmark.js
+	NODE_PATH=./node_modules node ./test-runner/run-local-arch-benchmark.js

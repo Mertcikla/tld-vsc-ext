@@ -345,18 +345,6 @@ export function activate(context: vscode.ExtensionContext): void {
         return
       }
 
-      // Check tree-sitter availability before doing any work
-      const { TreeSitterQueryLoader } = await import('./lsp/TreeSitterQueryLoader')
-      const tsLoader = new TreeSitterQueryLoader(context.extensionUri, vscode.workspace.workspaceFolders?.[0]?.uri)
-      if (!(await tsLoader.isAvailable())) {
-        const reason = tsLoader.getInitError()
-        vscode.window.showErrorMessage(
-          `tlDiagram: tree-sitter failed to initialize.${reason ? ` Reason: ${reason}` : ''} ` +
-          'Make sure @kreuzberg/tree-sitter-language-pack is installed (`npm install` in vscode-extension/) and the extension was rebuilt (`npm run compile:ext`).',
-        )
-        return
-      }
-
       // Determine target folder
       let folderUri: vscode.Uri | undefined = uri
       if (!folderUri) {
@@ -391,8 +379,11 @@ export function activate(context: vscode.ExtensionContext): void {
       // Read settings overrides
       const settings = vscode.workspace.getConfiguration('tldiagram.architecture')
       const { resolveConfig } = await import('./lsp/ArchitectureAnalyzer')
+      const { normalizeArchitectureParserMode, formatParserLabel } = await import('./parsing/shared/parserMode')
       const config = resolveConfig({
         abstractionLevel: levelPick.value,
+        parserMode: normalizeArchitectureParserMode(settings.get<string>('parserMode')),
+        showParserWarnings: settings.get<boolean>('showParserWarnings'),
         callHierarchyDepth: settings.get<number>('callHierarchyDepth'),
         groupingStrategy: settings.get<'folder' | 'role' | 'hybrid'>('groupingStrategy'),
         maxObjectsPerDiagram: settings.get<number>('maxObjectsPerDiagram'),
@@ -422,11 +413,12 @@ export function activate(context: vscode.ExtensionContext): void {
               context.extensionUri,
             )
 
-            const rootDiagramId = await analyzer.analyze(
+            const result = await analyzer.analyzeDetailed(
               folder,
               token,
               (msg) => progress.report({ message: msg }),
             )
+            const rootDiagramId = result.rootDiagramId
 
             treeProvider.refresh()
             const diagrams = await client!.listDiagrams()
@@ -434,6 +426,12 @@ export function activate(context: vscode.ExtensionContext): void {
             if (newDiagram) {
               const { DiagramTreeItem } = await import('./tree/DiagramTreeItem')
               await webviewManager.openDiagram(new DiagramTreeItem(newDiagram, 0))
+            }
+            if (config.showParserWarnings && result.parser.didFallback) {
+              const reasonSuffix = result.parser.reason ? ` ${result.parser.reason}` : ''
+              void vscode.window.showWarningMessage(
+                `Architecture analysis fell back from ${formatParserLabel(result.parser.requestedMode)} to ${formatParserLabel(result.parser.resolvedMode)}.${reasonSuffix}`,
+              )
             }
             logger.info('extension', 'generateArchitectureDiagram: complete', { rootDiagramId })
           } catch (e) {

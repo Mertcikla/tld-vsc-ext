@@ -1,21 +1,34 @@
 import * as vscode from 'vscode'
 import { logger } from '../logger'
-import { indexFolder } from './FolderIndexer'
-import { collectExternalLibraries, detectGoModulePath } from './ImportParser'
-import { RoleClassifier, DEFAULT_IMPORT_ROLE_MAP } from './RoleClassifier'
-import { TreeSitterQueryLoader } from './TreeSitterQueryLoader'
-import { buildRelationshipGraph } from './RelationshipMapper'
-import { groupSymbols } from './DiagramGrouper'
-import { buildArchitecturePlan } from './ArchitecturePlanBuilder'
-import { SOURCE_GLOB } from './symbolMapping'
 import type { ExtensionApiClient } from '../api/ExtensionApiClient'
-import type { ArchitecturalRole, CustomRolePattern } from './RoleClassifier'
+import { indexFolder } from '../parsing/lsp/LspSymbolIndexer'
+import {
+  createAutoFallbackResolution,
+  createParserResolution,
+} from '../parsing/shared/parserMode'
+import type {
+  ArchitectureAnalysisRunResult,
+  ArchitectureParserMode,
+  IndexedSymbol,
+  ParserResolution,
+} from '../parsing/shared/types'
+import { TreeSitterQueryLoader } from '../parsing/treesitter/TreeSitterQueryLoader'
+import { indexFolderWithTreeSitter } from '../parsing/treesitter/TreeSitterSymbolIndexer'
+import { buildArchitecturePlan } from './ArchitecturePlanBuilder'
 import type { GrouperConfig } from './DiagramGrouper'
-
-// ── Config types ──────────────────────────────────────────────────────────────
+import { groupSymbols } from './DiagramGrouper'
+import { collectExternalLibraries, detectGoModulePath } from './ImportParser'
+import { buildRelationshipGraph } from './RelationshipMapper'
+import { DEFAULT_IMPORT_ROLE_MAP } from '../parsing/shared/defaultImportRoleMap'
+import type { ArchitecturalRole } from '../parsing/shared/roles'
+import { RoleClassifier } from './RoleClassifier'
+import type { CustomRolePattern } from './RoleClassifier'
+import { SOURCE_GLOB } from './symbolMapping'
 
 export interface ArchitectureAnalysisConfig {
   abstractionLevel: 'overview' | 'standard' | 'detailed'
+  parserMode: ArchitectureParserMode
+  showParserWarnings: boolean
   targetObjectsPerDiagram: number
   maxObjectsPerDiagram: number
   minObjectsPerDiagram: number
@@ -29,8 +42,6 @@ export interface ArchitectureAnalysisConfig {
   importRoleMap: Record<string, ArchitecturalRole>
   customRolePatterns: CustomRolePattern[]
 }
-
-// ── Presets ───────────────────────────────────────────────────────────────────
 
 export const PRESETS: Record<'overview' | 'standard' | 'detailed', Partial<ArchitectureAnalysisConfig>> = {
   overview: {
@@ -64,6 +75,8 @@ export const PRESETS: Record<'overview' | 'standard' | 'detailed', Partial<Archi
 
 const BASE_CONFIG: ArchitectureAnalysisConfig = {
   abstractionLevel: 'standard',
+  parserMode: 'auto',
+  showParserWarnings: true,
   targetObjectsPerDiagram: 10,
   maxObjectsPerDiagram: 15,
   minObjectsPerDiagram: 3,
@@ -83,8 +96,6 @@ export function resolveConfig(overrides: Partial<ArchitectureAnalysisConfig>): A
   return { ...BASE_CONFIG, ...preset, ...overrides }
 }
 
-// ── Analyzer ──────────────────────────────────────────────────────────────────
-
 export class ArchitectureAnalyzer {
   constructor(
     private readonly client: ExtensionApiClient,
@@ -93,45 +104,53 @@ export class ArchitectureAnalyzer {
     private readonly extensionUri: vscode.Uri,
   ) {}
 
-  /**
-   * Runs the full analysis pipeline for the given folder URI.
-   * Returns the root diagram ID (the top-level "Architecture" diagram).
-   * Throws CancellationError if cancelled; cleans up partial diagrams on error.
-   */
   async analyze(
     folderUri: vscode.Uri,
     token: vscode.CancellationToken,
     onProgress: (message: string) => void,
   ): Promise<number> {
+    const result = await this.analyzeDetailed(folderUri, token, onProgress)
+    return result.rootDiagramId
+  }
+
+  async analyzeDetailed(
+    folderUri: vscode.Uri,
+    token: vscode.CancellationToken,
+    onProgress: (message: string) => void,
+  ): Promise<ArchitectureAnalysisRunResult> {
     const projectName = folderUri.fsPath.split('/').pop()?.split('\\').pop() ?? 'Project'
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
+    const treeSitterLoader = new TreeSitterQueryLoader(this.extensionUri, workspaceRoot)
 
-    // ── Phase 1: Index symbols ─────────────────────────────────────────────
     onProgress('Indexing symbols…')
     logger.info('ArchitectureAnalyzer', 'Phase 1: indexing', { folder: folderUri.fsPath })
-    const rawSymbols = await indexFolder(folderUri, token, (done, total) => {
-      onProgress(`Indexing… ${done}/${total} files`)
-    })
+    const { rawSymbols, parserResolution } = await this.indexSymbols(
+      folderUri,
+      token,
+      treeSitterLoader,
+      (done, total) => {
+        onProgress(`Indexing… ${done}/${total} files`)
+      },
+    )
+
+    if (parserResolution.didFallback) {
+      logger.warn('ArchitectureAnalyzer', 'Parser fallback applied', parserResolution)
+    } else {
+      logger.info('ArchitectureAnalyzer', 'Parser selected', parserResolution)
+    }
 
     if (token.isCancellationRequested) throw new vscode.CancellationError()
     if (rawSymbols.length === 0) {
       throw new Error('No indexable symbols found in this folder.')
     }
 
-    // Filter by minSymbolKinds
-    const CLASSES_ONLY = new Set([
-      vscode.SymbolKind.Class,
-      vscode.SymbolKind.Struct,
-      vscode.SymbolKind.Interface,
-      vscode.SymbolKind.Module,
-    ])
-    const filteredSymbols = this.config.minSymbolKinds === 'classes'
-      ? rawSymbols.filter((s) => CLASSES_ONLY.has(s.kind))
-      : rawSymbols
+    const filteredSymbols = this.filterIndexedSymbols(rawSymbols)
+    logger.info('ArchitectureAnalyzer', 'Phase 1 done', {
+      raw: rawSymbols.length,
+      filtered: filteredSymbols.length,
+      parserMode: parserResolution.resolvedMode,
+    })
 
-    logger.info('ArchitectureAnalyzer', 'Phase 1 done', { raw: rawSymbols.length, filtered: filteredSymbols.length })
-
-    // ── Phase 2: Detect external libraries ───────────────────────────────
     onProgress('Detecting external libraries…')
     logger.info('ArchitectureAnalyzer', 'Phase 2: import parsing')
     let externalLibraries = new Map<string, import('./ImportParser').ExternalLibrary>()
@@ -156,16 +175,18 @@ export class ArchitectureAnalyzer {
 
     if (token.isCancellationRequested) throw new vscode.CancellationError()
 
-    // ── Phase 3: Classify symbols ─────────────────────────────────────────
     onProgress('Classifying architectural roles…')
     logger.info('ArchitectureAnalyzer', 'Phase 3: classification')
-
-    const loader = new TreeSitterQueryLoader(this.extensionUri, workspaceRoot)
     const importFingerprint = RoleClassifier.buildImportFingerprint(
       externalLibraries,
       this.config.importRoleMap,
     )
-    const classifier = new RoleClassifier(loader, this.config.customRolePatterns, importFingerprint, this.config.disablePathHeuristics)
+    const classifier = new RoleClassifier(
+      parserResolution.resolvedMode === 'treesitter' ? treeSitterLoader : null,
+      this.config.customRolePatterns,
+      importFingerprint,
+      this.config.disablePathHeuristics,
+    )
     const classified = await classifier.classifyAll(filteredSymbols, token)
 
     logger.info('ArchitectureAnalyzer', 'Phase 3 done', {
@@ -175,13 +196,13 @@ export class ArchitectureAnalyzer {
 
     if (token.isCancellationRequested) throw new vscode.CancellationError()
 
-    // ── Phase 4: Build relationship graph ─────────────────────────────────
     onProgress('Mapping call relationships…')
     logger.info('ArchitectureAnalyzer', 'Phase 4: relationship mapping')
     const graph = await buildRelationshipGraph(
       classified,
-      loader,
+      parserResolution.resolvedMode === 'treesitter' ? treeSitterLoader : null,
       {
+        parserMode: parserResolution.resolvedMode,
         callHierarchyDepth: this.config.callHierarchyDepth,
         collapseIntermediates: this.config.collapseIntermediates,
       },
@@ -191,7 +212,6 @@ export class ArchitectureAnalyzer {
     logger.info('ArchitectureAnalyzer', 'Phase 4 done', { edges: graph.edges.length })
     if (token.isCancellationRequested) throw new vscode.CancellationError()
 
-    // ── Phase 5: Group into diagram buckets ───────────────────────────────
     onProgress('Grouping into diagrams…')
     logger.info('ArchitectureAnalyzer', 'Phase 5: grouping')
     const grouperConfig: GrouperConfig = {
@@ -209,7 +229,6 @@ export class ArchitectureAnalyzer {
 
     logger.info('ArchitectureAnalyzer', 'Phase 5 done', { groups: groups.length })
 
-    // ── Phase 6: Build plan ───────────────────────────────────────────────
     onProgress('Assembling plan…')
     logger.info('ArchitectureAnalyzer', 'Phase 6: plan assembly')
     const plan = buildArchitecturePlan(groups, graph, externalLibraries, {
@@ -225,11 +244,9 @@ export class ArchitectureAnalyzer {
       links: plan.links.length,
     })
 
-    // ── Phase 7: Submit ───────────────────────────────────────────────────
     onProgress(`Uploading plan (${plan.diagrams.length} diagrams, ${plan.objects.length} objects)…`)
     logger.info('ArchitectureAnalyzer', 'Phase 7: submitting plan')
 
-    // Cast to proto types — field names match exactly
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const refToId = await this.client.applyPlanFull({
       orgId: this.orgId,
@@ -245,11 +262,95 @@ export class ArchitectureAnalyzer {
     }
 
     logger.info('ArchitectureAnalyzer', 'Analysis complete', { rootDiagramId })
-    return rootDiagramId
+    return {
+      rootDiagramId,
+      parser: parserResolution,
+    }
+  }
+
+  private filterIndexedSymbols(rawSymbols: IndexedSymbol[]): IndexedSymbol[] {
+    const classesOnly = new Set([
+      vscode.SymbolKind.Class,
+      vscode.SymbolKind.Struct,
+      vscode.SymbolKind.Interface,
+      vscode.SymbolKind.Module,
+    ])
+
+    return this.config.minSymbolKinds === 'classes'
+      ? rawSymbols.filter((s) => classesOnly.has(s.kind))
+      : rawSymbols
+  }
+
+  private async indexSymbols(
+    folderUri: vscode.Uri,
+    token: vscode.CancellationToken,
+    treeSitterLoader: TreeSitterQueryLoader,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<{ rawSymbols: IndexedSymbol[]; parserResolution: ParserResolution }> {
+    const requestedMode = this.config.parserMode
+    const tryLsp = async (): Promise<IndexedSymbol[]> => indexFolder(folderUri, token, onProgress)
+    const tryTreeSitter = async (): Promise<IndexedSymbol[]> => indexFolderWithTreeSitter(folderUri, token, onProgress)
+
+    if (requestedMode === 'treesitter') {
+      const treeSitterAvailable = await treeSitterLoader.isAvailable()
+      if (treeSitterAvailable) {
+        const treeSitterSymbols = await tryTreeSitter()
+        if (treeSitterSymbols.length > 0) {
+          return {
+            rawSymbols: treeSitterSymbols,
+            parserResolution: createParserResolution('treesitter', 'treesitter'),
+          }
+        }
+      }
+
+      const rawSymbols = await tryLsp()
+      return {
+        rawSymbols,
+        parserResolution: createParserResolution(
+          'treesitter',
+          'lsp',
+          treeSitterAvailable
+            ? 'Tree-sitter indexing returned no indexable symbols.'
+            : `Tree-sitter is unavailable.${treeSitterLoader.getInitError() ? ` ${treeSitterLoader.getInitError()}` : ''}`,
+        ),
+      }
+    }
+
+    try {
+      const lspSymbols = await tryLsp()
+      if (lspSymbols.length > 0) {
+        return {
+          rawSymbols: lspSymbols,
+          parserResolution: createParserResolution(requestedMode, 'lsp'),
+        }
+      }
+    } catch (e) {
+      logger.warn('ArchitectureAnalyzer', 'LSP indexing failed', { error: String(e) })
+    }
+
+    const treeSitterAvailable = await treeSitterLoader.isAvailable()
+    if (treeSitterAvailable) {
+      const treeSitterSymbols = await tryTreeSitter()
+      if (treeSitterSymbols.length > 0) {
+        return {
+          rawSymbols: treeSitterSymbols,
+          parserResolution: requestedMode === 'auto'
+            ? createAutoFallbackResolution('treesitter', 'LSP indexing returned no indexable symbols.')
+            : createParserResolution('lsp', 'treesitter', 'LSP indexing returned no indexable symbols.'),
+        }
+      }
+    }
+
+    return {
+      rawSymbols: [],
+      parserResolution: createParserResolution(
+        requestedMode,
+        'lsp',
+        treeSitterAvailable ? 'Both parsers returned no indexable symbols.' : 'Tree-sitter is unavailable and LSP indexing returned no symbols.',
+      ),
+    }
   }
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function countRoles(symbols: Array<{ role: string }>): Record<string, number> {
   const counts: Record<string, number> = {}

@@ -5,8 +5,11 @@ const path = require('path')
 const { globSync } = require('glob')
 const tsPack = require('@kreuzberg/tree-sitter-language-pack')
 
-const SOURCE_GLOB = '**/*.{ts,tsx,js,jsx,go,py,rs,java,kt,swift,cpp,cc,cxx,c,h,cs}'
-const DEFAULT_EXCLUDES = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/out/**', '**/.git/**']
+const SOURCE_GLOB = '**/*.{ts,tsx,js,jsx,go,py,rs,java,kt,swift,cpp,cc,cxx,c,h,hpp,cs,rb,vue}'
+const DEFAULT_EXCLUDES = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/out/**', '**/.git/**', '**/vendor/**', '**/target/**', '**/tmp/**']
+
+// Pre-download parsers we need (no-op if already cached)
+tsPack.download(['typescript', 'javascript', 'go', 'python', 'rust', 'java', 'csharp', 'ruby', 'cpp'])
 
 const ROLE_QUERY_FILES = ['api_entry', 'repository', 'service']
 const QUERY_ROLE_MAP = {
@@ -56,7 +59,18 @@ function langFromExt(filePath) {
   if (ext === '.rs') return 'rust'
   if (ext === '.java') return 'java'
   if (ext === '.cs') return 'csharp'
+  if (ext === '.cpp' || ext === '.cc' || ext === '.cxx' || ext === '.c' || ext === '.h' || ext === '.hpp') return 'cpp'
+  if (ext === '.rb') return 'ruby'
+  if (ext === '.vue') return 'vue'
   return null
+}
+
+// Extracts the <script> block from a Vue SFC and returns its content + effective language.
+function extractVueScript(src) {
+  const tsMatch = /<script[^>]+lang=["']ts["'][^>]*>([\s\S]*?)<\/script>/i.exec(src)
+  if (tsMatch) return { content: tsMatch[1], lang: 'typescript' }
+  const jsMatch = /<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/i.exec(src)
+  return jsMatch ? { content: jsMatch[1], lang: 'javascript' } : null
 }
 
 function toRel(repoRoot, absPath) {
@@ -82,7 +96,51 @@ function extractMatches(source, lang, queryName, queryText) {
   }
 }
 
+// Parse a single import `source` string (as returned by kreuzberg process()) into a module path.
+function parseImportSource(source, lang) {
+  if (lang === 'typescript' || lang === 'javascript') {
+    // "import X from 'path'" or "import 'path'" or "import('path')" or "require('path')"
+    const m = /['"]([^'"]+)['"]\s*[;)]?\s*$/.exec(source) ||
+              /from\s+['"]([^'"]+)['"]/m.exec(source)
+    return m ? m[1] : null
+  }
+  if (lang === 'python') {
+    const m = /^from\s+([\w.]+)\s+import/m.exec(source) || /^import\s+([\w.]+)/m.exec(source)
+    return m ? m[1] : null
+  }
+  if (lang === 'java') {
+    const m = /^import\s+(?:static\s+)?([\w.*]+)/m.exec(source)
+    if (!m) return null
+    return m[1].replace(/\.\*$/, '')  // strip wildcard
+  }
+  if (lang === 'rust') {
+    const m = /^use\s+([\w:{}*]+)/m.exec(source)
+    return m ? m[1] : null
+  }
+  if (lang === 'ruby') {
+    const m = /require(?:_relative)?\s+['"]([^'"]+)['"]/m.exec(source)
+    return m ? m[1] : null
+  }
+  return null
+}
+
 function extractImports(source, lang, queryCache, repoRoot) {
+  // For languages where kreuzberg's process() natively returns imports, use that.
+  // It's more reliable than SCM queries for these languages.
+  if (lang === 'python' || lang === 'java' || lang === 'rust' || lang === 'typescript' || lang === 'javascript') {
+    try {
+      const result = tsPack.process(source, { language: lang, imports: true })
+      const paths = []
+      for (const imp of result.imports ?? []) {
+        const parsed = parseImportSource(imp.source ?? '', lang)
+        if (parsed) paths.push(parsed)
+      }
+      return paths
+    } catch {
+      // fall through to SCM query
+    }
+  }
+
   const q = queryCache.get(`${lang}:imports`) ?? loadQueryText(repoRoot, lang, 'imports')
   queryCache.set(`${lang}:imports`, q)
   const matches = extractMatches(source, lang, 'imports', q)
@@ -132,8 +190,11 @@ function findGoModulePath(repoRoot) {
 }
 
 function isExternalImport(importPath) {
-  if (!importPath.includes('/') && !importPath.startsWith('.')) return true
-  return importPath.startsWith('node:') || importPath.startsWith('bun:') || importPath.startsWith('@types/') || importPath.startsWith('std/')
+  // Single-word with no separators at all → definitely stdlib/external (Go "fmt", "os"; single JS packages)
+  if (!importPath.includes('/') && !importPath.includes('.') && !importPath.includes('::') && !importPath.startsWith('.')) return true
+  // Known external-only prefixes
+  if (importPath.startsWith('node:') || importPath.startsWith('bun:') || importPath.startsWith('@types/') || importPath.startsWith('std/')) return true
+  return false
 }
 
 function posixResolve(baseDir, relPath) {
@@ -148,11 +209,57 @@ function posixResolve(baseDir, relPath) {
 function resolveImportPath(importPath, fromFile, allPaths, goModPrefix) {
   if (isExternalImport(importPath)) return []
   const fromDir = fromFile.split('/').slice(0, -1).join('/')
-  if (importPath.startsWith('.')) {
-    const resolved = posixResolve(fromDir, importPath)
-    return allPaths.filter((fp) => fp === resolved || fp.startsWith(resolved + '.') || fp.startsWith(resolved + '/index.'))
+
+  // ── Common path alias: @/ → src/ (Vite, Vue CLI, etc.) ─────────────────────
+  if (importPath.startsWith('@/')) {
+    importPath = 'src/' + importPath.slice(2)
   }
 
+  // ── Relative imports (all languages) ────────────────────────────────────────
+  if (importPath.startsWith('.')) {
+    const resolved = posixResolve(fromDir, importPath)
+    return allPaths.filter((fp) =>
+      fp === resolved ||
+      fp.startsWith(resolved + '.') ||      // ./foo → foo.ts
+      fp.startsWith(resolved + '/'),        // ./foo → foo/index.ts OR foo/Bar.ts
+    )
+  }
+
+  // ── Rust crate-relative paths (crate:: / self:: / super::) ──────────────────
+  if (importPath.startsWith('crate::') || importPath.startsWith('self::') || importPath.startsWith('super::')) {
+    let rel
+    if (importPath.startsWith('crate::')) {
+      rel = importPath.slice('crate::'.length).split('::').join('/')
+    } else if (importPath.startsWith('self::')) {
+      rel = fromDir + '/' + importPath.slice('self::'.length).split('::').join('/')
+    } else {
+      rel = posixResolve(fromDir + '/..', importPath.slice('super::'.length).split('::').join('/'))
+    }
+    // Also try without the last segment (the last part may be a type name, not a module)
+    const relParts = rel.split('/')
+    const relWithoutLast = relParts.length > 1 ? relParts.slice(0, -1).join('/') : null
+    return allPaths.filter((fp) => {
+      const noExt = fp.replace(/\.rs$/, '').replace(/\/mod$/, '')
+      return noExt === rel || noExt.endsWith('/' + rel) || fp.startsWith(rel + '/') ||
+        (relWithoutLast && (noExt === relWithoutLast || noExt.endsWith('/' + relWithoutLast)))
+    })
+  }
+
+  // ── Python / Java dotted-path imports (convert dots → slashes) ──────────────
+  if (importPath.includes('.') && !importPath.includes('/')) {
+    const rel = importPath.replace(/\./g, '/')
+    // Also try without the last segment (Java: com.example.ClassName → com/example)
+    const relParts = rel.split('/')
+    const relWithoutLast = relParts.length > 1 ? relParts.slice(0, -1).join('/') : null
+    const matches = allPaths.filter((fp) => {
+      const noExt = fp.replace(/\.(py|java|kt)$/, '').replace(/\/__init__$/, '')
+      return noExt === rel || noExt.endsWith('/' + rel) || fp.replace(/\.[^.]+$/, '').startsWith(rel + '/') ||
+        (relWithoutLast && (noExt === relWithoutLast || noExt.endsWith('/' + relWithoutLast)))
+    })
+    if (matches.length) return matches
+  }
+
+  // ── Go / absolute module imports ─────────────────────────────────────────────
   let rel = importPath
   if (goModPrefix && importPath.startsWith(goModPrefix)) rel = importPath.slice(goModPrefix.length).replace(/^\//, '')
   const suffix = allPaths.filter((fp) => {
@@ -494,20 +601,59 @@ function main() {
 
   for (const abs of files) {
     const rel = toRel(repoRoot, abs)
-    const lang = langFromExt(rel)
-    if (!lang) continue
-    const text = fs.readFileSync(abs, 'utf8')
+    const rawLang = langFromExt(rel)
+    if (!rawLang) continue
+
+    const rawText = fs.readFileSync(abs, 'utf8')
+
+    // For Vue SFCs, extract the <script> block and treat it as JS/TS.
+    let text, lang
+    if (rawLang === 'vue') {
+      const extracted = extractVueScript(rawText)
+      if (!extracted) continue
+      text = extracted.content
+      lang = extracted.lang
+    } else {
+      text = rawText
+      lang = rawLang
+    }
+
     fileData.set(rel, { text, lang })
 
+    let parsedSymbols = 0
     try {
-      const result = tsPack.process(text, { language: lang, structure: true, imports: false })
+      const result = tsPack.process(text, { language: lang, structure: true })
       for (const item of result.structure || []) {
         const kind = kindBucket(item.kind)
         if (!kind) continue
-        symbols.push({ name: item.name || '(anonymous)', kind, filePath: rel, startLine: item.span?.startRow ?? 0 })
+        // Skip anonymous symbols (common in C++ where function names aren't always extracted)
+        const name = item.name
+        if (!name) continue
+        symbols.push({ name, kind, filePath: rel, startLine: item.span?.startRow ?? 0 })
+        parsedSymbols++
       }
     } catch {
       // Skip file if parser fails.
+    }
+
+    if (parsedSymbols === 0 && lang === 'cpp') {
+      const cppQuery = `
+        (class_specifier name: (type_identifier) @name) @class
+        (struct_specifier name: (type_identifier) @name) @struct
+        (function_definition declarator: (function_declarator declarator: (identifier) @name)) @func
+      `
+      const matches = extractMatches(text, lang, 'cpp_fallback', cppQuery)
+      for (const m of matches) {
+        let name = ''
+        let startLine = 0
+        for (const c of m.captures || []) {
+          if (c.name === 'name') name = c.text
+          if (c.node) startLine = c.node.startRow ?? c.node.row ?? 0
+        }
+        if (name) {
+          symbols.push({ name, kind: 'class', filePath: rel, startLine })
+        }
+      }
     }
 
     const imports = extractImports(text, lang, queryCache, repoRoot)
@@ -523,10 +669,17 @@ function main() {
           if (goMod && spec.startsWith(goMod)) continue
           lib = spec.includes('.') ? spec.split('/').slice(0, 3).join('/') : spec
         } else if (lang === 'python') {
+          // Internal package: first segment matches a local directory — skip; else treat as external lib.
           lib = spec.split('.')[0]
         } else if (lang === 'rust') {
           if (spec.startsWith('crate::') || spec.startsWith('self::') || spec.startsWith('super::') || spec.startsWith('std::')) continue
           lib = spec.split('::')[0]
+        } else if (lang === 'java') {
+          // Top-2 dot-segments as lib identifier: com.example → "com.example"
+          if (spec.includes('.')) lib = spec.split('.').slice(0, 2).join('.')
+        } else if (lang === 'ruby') {
+          // require 'rails', 'active_record', etc.
+          lib = spec.split('/')[0]
         }
         if (lib) libs.add(lib)
       }
@@ -583,6 +736,40 @@ function main() {
           }
         }
       }
+    }
+  }
+
+  if (preset.collapseIntermediates) {
+    edges = applyPlatonicFilter(edges, classified)
+  }
+
+  const groups = groupSymbols(classified, edges, {
+    groupingStrategy: args.groupingStrategy,
+    targetObjectsPerDiagram: preset.targetObjectsPerDiagram,
+    maxObjectsPerDiagram: preset.maxObjectsPerDiagram,
+    minObjectsPerDiagram: preset.minObjectsPerDiagram,
+    includeUtilities: preset.includeUtilities,
+  })
+
+  const counts = countsFromPlan(groups, edges, externalLibs, args.includeExternalLibraries)
+  process.stdout.write(`${JSON.stringify({
+    repo: repoRoot,
+    level: args.level,
+    filesScanned: files.length,
+    indexedSymbols: symbols.length,
+    classifiedSymbols: classified.length,
+    groups: groups.length,
+    ...counts,
+  }, null, 2)}\n`)
+}
+
+try {
+  main()
+} catch (e) {
+  process.stderr.write(`local-arch-parse failed: ${e instanceof Error ? e.message : String(e)}\n`)
+  process.exit(1)
+}
+     }
     }
   }
 
