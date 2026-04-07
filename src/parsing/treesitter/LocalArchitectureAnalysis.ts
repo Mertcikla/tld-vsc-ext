@@ -23,6 +23,7 @@ import {
 import { createCachedTreeSitterQueryTextResolver, type TreeSitterQueryTextResolver } from './queryTextResolver'
 import type { KreuzbergModule } from './runtime'
 import { prepareTreeSitterSource } from './source'
+import type { ArchitectureParserMode, ResolvedArchitectureParserMode } from '../shared/types'
 
 type LocalArchitecturalRole = ArchitecturalRole
 
@@ -46,6 +47,7 @@ type SymbolEdge = {
 export interface LocalArchitectureAnalysisOptions {
   repo: string
   level?: 'overview' | 'standard' | 'detailed'
+  parserMode?: ArchitectureParserMode
   includeExternalLibraries?: boolean
   groupingStrategy?: 'folder' | 'role' | 'hybrid'
   disablePathHeuristics?: boolean
@@ -54,6 +56,7 @@ export interface LocalArchitectureAnalysisOptions {
 export interface LocalArchitectureAnalysisResult {
   repo: string
   level: 'overview' | 'standard' | 'detailed'
+  parserMode: ResolvedArchitectureParserMode
   filesScanned: number
   indexedSymbols: number
   classifiedSymbols: number
@@ -72,7 +75,7 @@ const PRESETS = {
     callHierarchyDepth: 1,
     collapseIntermediates: true,
     includeUtilities: false,
-    minSymbolKinds: 'classes',
+    minSymbolKinds: 'all',
     targetObjectsPerDiagram: 8,
     maxObjectsPerDiagram: 12,
     minObjectsPerDiagram: 2,
@@ -81,7 +84,7 @@ const PRESETS = {
     callHierarchyDepth: 2,
     collapseIntermediates: true,
     includeUtilities: false,
-    minSymbolKinds: 'classes',
+    minSymbolKinds: 'all',
     targetObjectsPerDiagram: 10,
     maxObjectsPerDiagram: 15,
     minObjectsPerDiagram: 3,
@@ -239,6 +242,12 @@ export async function analyzeLocalArchitecture(
 ): Promise<LocalArchitectureAnalysisResult> {
   const repoRoot = path.resolve(options.repo)
   const level = options.level ?? 'standard'
+  const requestedParserMode = options.parserMode ?? 'treesitter'
+
+  if (requestedParserMode === 'lsp') {
+    throw new Error('Local benchmark runner does not support parserMode=lsp outside the VS Code host. Use parserMode=treesitter for the local path.')
+  }
+
   const preset = PRESETS[level]
   const includeExternalLibraries = options.includeExternalLibraries ?? true
   const groupingStrategy = options.groupingStrategy ?? 'hybrid'
@@ -405,6 +414,7 @@ export async function analyzeLocalArchitecture(
   return {
     repo: repoRoot,
     level,
+    parserMode: 'treesitter',
     filesScanned: files.length,
     indexedSymbols: symbols.length,
     classifiedSymbols: classified.length,

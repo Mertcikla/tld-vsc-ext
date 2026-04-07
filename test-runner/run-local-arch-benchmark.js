@@ -11,6 +11,23 @@ const REALWORLD_DIR = path.join(ROOT_DIR, 'test-data', 'realworld');
 const RESULTS_PATH = path.join(os.tmpdir(), 'tldiagram-benchmark-results.json');
 const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
+function parseArgs(argv) {
+    const args = {
+        repo: '',
+        level: 'detailed',
+        parser: 'treesitter',
+    };
+
+    for (let i = 2; i < argv.length; i++) {
+        const arg = argv[i];
+        if (arg === '--repo') args.repo = argv[++i] ?? '';
+        else if (arg === '--level') args.level = argv[++i] ?? 'detailed';
+        else if (arg === '--parser' || arg === '--parser-mode') args.parser = argv[++i] ?? 'treesitter';
+    }
+
+    return args;
+}
+
 function collectProjects(kind) {
     const kindDir = path.join(REALWORLD_DIR, kind);
     return fs.readdirSync(kindDir)
@@ -38,11 +55,11 @@ function parseBenchmarkResult(output) {
     }
 }
 
-function runLocalAnalysis(projectDir) {
+function runLocalAnalysis(projectDir, level, parser) {
     const startedAt = Date.now();
     const child = spawnSync(
         NPM_COMMAND,
-        ['run', '-s', 'arch:parse-local', '--', '--repo', projectDir, '--level', 'detailed'],
+        ['run', '-s', 'arch:parse-local', '--', '--repo', projectDir, '--level', level, '--parser', parser],
         {
             cwd: ROOT_DIR,
             encoding: 'utf8',
@@ -107,25 +124,34 @@ function renderTable(results, kind, title) {
 }
 
 async function main() {
+    const args = parseArgs(process.argv);
     console.log('\x1b[36mStarting Local Architecture Benchmark...\x1b[0m');
     console.log(`Workspace: ${ROOT_DIR}`);
-    console.log(`Corpus: ${REALWORLD_DIR}`);
+    console.log(`Target: ${args.repo ? path.resolve(args.repo) : REALWORLD_DIR}`);
+    console.log(`Level: ${args.level}`);
+    console.log(`Parser: ${args.parser}`);
     console.log('Runner: npm run -s arch:parse-local\n');
 
     if (fs.existsSync(RESULTS_PATH)) {
         fs.unlinkSync(RESULTS_PATH);
     }
 
-    const projects = [
-        ...collectProjects('frontend'),
-        ...collectProjects('backend'),
-    ];
+    const projects = args.repo
+        ? [{
+            projectName: path.basename(path.resolve(args.repo)),
+            kind: 'custom',
+            dir: path.resolve(args.repo),
+        }]
+        : [
+            ...collectProjects('frontend'),
+            ...collectProjects('backend'),
+        ];
 
     const results = [];
     for (const project of projects) {
         console.log(`\n\x1b[36mTesting: ${project.projectName} (${project.kind})\x1b[0m`);
         try {
-            const result = runLocalAnalysis(project.dir);
+            const result = runLocalAnalysis(project.dir, args.level, args.parser);
             results.push({
                 projectName: project.projectName,
                 kind: project.kind,
@@ -140,7 +166,8 @@ async function main() {
                 projectName: project.projectName,
                 kind: project.kind,
                 repo: project.dir,
-                level: 'detailed',
+                level: args.level,
+                parserMode: args.parser,
                 filesScanned: 0,
                 indexedSymbols: 0,
                 classifiedSymbols: 0,
@@ -159,12 +186,20 @@ async function main() {
     const summary = { results };
     fs.writeFileSync(RESULTS_PATH, JSON.stringify(summary, null, 2));
 
-    console.log('\n\x1b[32m=== RESULTS ===\x1b[0m');
-    renderTable(results, 'frontend', 'Frontend Implementations');
-    renderTable(results, 'backend', 'Backend Implementations');
+    const failedCount = results.filter(result => result.error).length;
+
+    if (!args.repo) {
+        console.log('\n\x1b[32m=== RESULTS ===\x1b[0m');
+        renderTable(results, 'frontend', 'Frontend Implementations');
+        renderTable(results, 'backend', 'Backend Implementations');
+    }
 
     console.log(`\nBenchmark summary written to ${RESULTS_PATH}`);
     console.log(`Projects analyzed: ${results.length}`);
+
+    if (args.repo && failedCount > 0) {
+        process.exit(1);
+    }
 }
 
 main().catch(err => {
