@@ -4,8 +4,12 @@
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
   "version": "0.1.0",
   "publisher": "tldiagramcom",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Visualization"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "onUri"
@@ -93,13 +97,23 @@
         "title": "Focus on Canvas"
       },
       {
-        "command": "tldiagram.createDiagramFromFolder",
-        "title": "Create tlDiagram from Folder",
+        "command": "tldiagram.diagramCallGraph",
+        "title": "tlDiagram: Diagram Call Graph",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "tldiagram.diagramTypeHierarchy",
+        "title": "tlDiagram: Diagram Type Hierarchy",
         "icon": "$(type-hierarchy)"
       },
       {
         "command": "tldiagram.showLogs",
         "title": "tlDiagram: Show Logs"
+      },
+      {
+        "command": "tldiagram.generateArchitectureDiagram",
+        "title": "tlDiagram: Generate Architecture Diagram",
+        "icon": "$(symbol-structure)"
       }
     ],
     "menus": {
@@ -144,9 +158,21 @@
       ],
       "explorer/context": [
         {
-          "command": "tldiagram.createDiagramFromFolder",
+          "command": "tldiagram.generateArchitectureDiagram",
           "when": "explorerResourceIsFolder && tldiagram.authenticated",
-          "group": "tldiagram"
+          "group": "tldiagram@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "tldiagram.diagramCallGraph",
+          "when": "editorTextFocus && tldiagram.authenticated",
+          "group": "tldiagram@1"
+        },
+        {
+          "command": "tldiagram.diagramTypeHierarchy",
+          "when": "editorTextFocus && tldiagram.authenticated",
+          "group": "tldiagram@2"
         }
       ]
     },
@@ -161,7 +187,14 @@
         "tldiagram.logLevel": {
           "type": "string",
           "default": "info",
-          "enum": ["off", "error", "warn", "info", "debug", "trace"],
+          "enum": [
+            "off",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ],
           "enumDescriptions": [
             "No logging",
             "Errors only",
@@ -171,6 +204,135 @@
             "Very verbose: includes every message routed through the bridge and every object created"
           ],
           "description": "Controls verbosity of the tlDiagram output channel. Use 'debug' or 'trace' when reporting issues."
+        },
+        "tldiagram.respectWorkspaceExcludes": {
+          "type": "boolean",
+          "default": true,
+          "description": "When scanning for symbols, respect VS Code's files.exclude, search.exclude settings and .gitignore. When false, only built-in exclusions (node_modules, dist, build, out, .git) apply."
+        },
+        "tldiagram.extraExcludes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional glob patterns to exclude from symbol scanning. Example: [\"**/generated/**\", \"**/__mocks__/**\"]"
+        },
+        "tldiagram.callHierarchyMaxDepth": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum depth when building call graph or type hierarchy diagrams."
+        },
+        "tldiagram.architecture.abstractionLevel": {
+          "type": "string",
+          "default": "standard",
+          "enum": [
+            "overview",
+            "standard",
+            "detailed"
+          ],
+          "enumDescriptions": [
+            "High-level view: key components only, roles collapsed, max ~12 objects per diagram",
+            "Balanced detail: recommended starting point, max ~15 objects per diagram",
+            "Full breakdown: utilities included, all symbol kinds, max ~18 objects per diagram"
+          ],
+          "description": "Default abstraction level preset for architecture diagram generation. Can be overridden per-run via the quick pick."
+        },
+        "tldiagram.architecture.targetObjectsPerDiagram": {
+          "type": "number",
+          "default": 10,
+          "minimum": 3,
+          "maximum": 30,
+          "description": "Target number of objects per diagram. Groups are split/merged to approach this number."
+        },
+        "tldiagram.architecture.maxObjectsPerDiagram": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 50,
+          "description": "Groups exceeding this size are automatically split into sub-diagrams."
+        },
+        "tldiagram.architecture.minObjectsPerDiagram": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Groups smaller than this are merged into the most-related neighbour."
+        },
+        "tldiagram.architecture.callHierarchyDepth": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Call hierarchy traversal depth for relationship mapping. 0 disables call analysis entirely."
+        },
+        "tldiagram.architecture.groupingStrategy": {
+          "type": "string",
+          "default": "hybrid",
+          "enum": [
+            "folder",
+            "role",
+            "hybrid"
+          ],
+          "enumDescriptions": [
+            "Group by directory structure",
+            "Group by architectural role (API Layer, Services, Data Layer, etc.)",
+            "Folder-first, falling back to role grouping for flat structures"
+          ],
+          "description": "How to cluster symbols into diagram groups."
+        },
+        "tldiagram.architecture.collapseIntermediates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Apply the Platonic filter: collapse pass-through nodes (single in, single out, no side effects) to simplify the graph."
+        },
+        "tldiagram.architecture.includeExternalLibraries": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create an 'External Dependencies' child diagram for detected third-party imports."
+        },
+        "tldiagram.architecture.includeUtilities": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include utility/helper classes in diagrams. Disable for cleaner high-level views."
+        },
+        "tldiagram.architecture.importRoleMap": {
+          "type": "object",
+          "default": {},
+          "description": "Override or extend the default import-path → architectural role mapping. Keys are case-insensitive substrings matched against import paths (e.g. {\"my-db-lib\": \"repository\"}). An empty object uses the built-in defaults."
+        },
+        "tldiagram.architecture.customRolePatterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Regex or substring matched against the file path (case-insensitive)"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "api_entry",
+                  "service",
+                  "repository",
+                  "data_exit",
+                  "model",
+                  "utility",
+                  "external",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "pattern",
+              "role"
+            ]
+          },
+          "default": [],
+          "description": "Custom file-path pattern → architectural role overrides. These take highest priority, before tree-sitter queries and import analysis. Example: [{\"pattern\": \"/adapters/\", \"role\": \"repository\"}]"
         }
       }
     }
@@ -181,18 +343,28 @@
     "compile": "npm run compile:ext && npm run compile:webview",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run compile && npx @vscode/vsce package",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "test": "vitest run",
+    "arch:parse-local": "node scripts/local-arch-parse.js"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
     "@connectrpc/connect": "^2.1.1",
-    "@connectrpc/connect-web": "^2.1.1"
+    "@connectrpc/connect-web": "^2.1.1",
+    "@kreuzberg/tree-sitter-language-pack": "^1.4.1"
   },
   "devDependencies": {
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.0.0",
+    "chalk": "^5.6.2",
+    "cli-table3": "^0.6.5",
     "esbuild": "^0.25.0",
-    "typescript": "^5.6.0"
+    "glob": "^13.0.6",
+    "module-alias": "^2.3.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
   }
 }

@@ -1,10 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="3" y="3" width="6" height="6" rx="1"/>
-  <rect x="15" y="3" width="6" height="6" rx="1"/>
-  <rect x="3" y="15" width="6" height="6" rx="1"/>
-  <rect x="15" y="15" width="6" height="6" rx="1"/>
-  <line x1="9" y1="6" x2="15" y2="6"/>
-  <line x1="6" y1="9" x2="6" y2="15"/>
-  <line x1="18" y1="9" x2="18" y2="15"/>
-  <line x1="9" y1="18" x2="15" y2="18"/>
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="roundsq">
+      <rect width="1024" height="1024" rx="224" ry="224" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#roundsq)">
+    <g transform="translate(78, 118) scale(0.8)" fill-rule="evenodd">
+      <path
+        d="M201 18s169-39 340-2c171 38 342 152 342 457S713 902 544 949c-170 48-344 19-344 19l1-566h302V217H201z M455 715c-67 83-122 141-62 48q23-35 33-62h-4a78 78 0 1 1 78-78q0 24-12 44-11 21-33 48"
+        fill="#000000" />
+    </g>
+  </g>
 </svg>

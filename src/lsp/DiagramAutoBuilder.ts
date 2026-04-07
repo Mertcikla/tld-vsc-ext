@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import { logger } from '../logger'
 import type { ExtensionApiClient } from '../api/ExtensionApiClient'
 import type { IndexedSymbol } from './FolderIndexer'
+import type { ExternalLibrary } from './ImportParser'
 import { kindToObjectType } from './symbolMapping'
 
 const GRID_COLS = 8
@@ -22,6 +23,7 @@ export async function buildDiagramFromSymbols(
   orgId: string,
   token: vscode.CancellationToken,
   onProgress: (done: number, total: number) => void,
+  externalLibraries?: Map<string, ExternalLibrary>,
 ): Promise<number> {
   logger.info('DiagramAutoBuilder', 'Starting diagram build', {
     folderName,
@@ -88,6 +90,32 @@ export async function buildDiagramFromSymbols(
     }
 
     logger.info('DiagramAutoBuilder', 'Diagram build complete', { diagramId, objectsCreated })
+
+    // Place external library nodes in a separate row below the symbol grid
+    if (externalLibraries && externalLibraries.size > 0) {
+      const symbolRows = Math.ceil(symbols.length / GRID_COLS)
+      const libraryBaseY = (symbolRows + 1) * GRID_ROW_H
+      const libEntries = [...externalLibraries.values()]
+      logger.info('DiagramAutoBuilder', 'Placing external library nodes', { count: libEntries.length })
+
+      for (let i = 0; i < libEntries.length; i += BATCH_SIZE) {
+        if (token.isCancellationRequested) {
+          logger.info('DiagramAutoBuilder', 'Cancellation during library placement — deleting partial diagram', { diagramId })
+          await client.deleteDiagram(orgId, diagramId)
+          throw new vscode.CancellationError()
+        }
+        const batch = libEntries.slice(i, i + BATCH_SIZE)
+        await Promise.all(
+          batch.map(async (lib, batchIdx) => {
+            const idx = i + batchIdx
+            const x = (idx % GRID_COLS) * GRID_COL_W
+            const y = libraryBaseY + Math.floor(idx / GRID_COLS) * GRID_ROW_H
+            const obj = await client.createObject({ name: lib.name, type: 'external_system' })
+            await client.addObjectToDiagram(diagramId, obj.id, x, y)
+          }),
+        )
+      }
+    }
   } catch (e) {
     if (!(e instanceof vscode.CancellationError)) {
       logger.error('DiagramAutoBuilder', 'Build failed — cleaning up diagram', {

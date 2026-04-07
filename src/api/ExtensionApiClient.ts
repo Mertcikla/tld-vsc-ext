@@ -10,6 +10,11 @@ import {
   CreateDiagramResponseSchema,
   RenameDiagramResponseSchema,
   CreateObjectResponseSchema,
+  ApplyPlanResponseSchema,
+  type PlanDiagram,
+  type PlanObject,
+  type PlanEdge,
+  type PlanLink,
 } from '../../../frontend/src/gen/diag/v1/diagram_service_pb'
 
 import type { ValidatedUser } from '../auth/AuthManager'
@@ -121,5 +126,64 @@ export class ExtensionApiClient {
   async addObjectToDiagram(diagramId: number, objectId: number, x: number, y: number): Promise<void> {
     logger.trace('ExtensionApiClient', 'addObjectToDiagram', { diagramId, objectId, x, y })
     await this.diagramClient.addObjectToDiagram({ diagramId, objectId, positionX: x, positionY: y })
+  }
+
+  async applyPlan(params: {
+    orgId: string
+    diagrams: PlanDiagram[]
+    objects: PlanObject[]
+    edges: PlanEdge[]
+  }): Promise<number> {
+    logger.info('ExtensionApiClient', 'applyPlan', {
+      diagrams: params.diagrams.length,
+      objects: params.objects.length,
+      edges: params.edges.length,
+    })
+    const res = await this.diagramClient.applyPlan({
+      orgId: params.orgId,
+      diagrams: params.diagrams,
+      objects: params.objects,
+      edges: params.edges,
+      links: [],
+    })
+    const diagRef = params.diagrams[0].ref
+    const json = j<{ metadata: Record<string, { id: number }> }>(ApplyPlanResponseSchema, res)
+    const meta = json.metadata?.[diagRef]
+    if (!meta?.id) throw new Error(`applyPlan: no metadata for diagram ref "${diagRef}"`)
+    logger.info('ExtensionApiClient', 'applyPlan: complete', { diagramId: meta.id })
+    return meta.id
+  }
+
+  /**
+   * Like applyPlan but supports PlanLinks (drill-down connections between diagrams)
+   * and returns the full metadata map (ref → server-assigned id) for all created resources.
+   */
+  async applyPlanFull(params: {
+    orgId: string
+    diagrams: PlanDiagram[]
+    objects: PlanObject[]
+    edges: PlanEdge[]
+    links: PlanLink[]
+  }): Promise<Record<string, number>> {
+    logger.info('ExtensionApiClient', 'applyPlanFull', {
+      diagrams: params.diagrams.length,
+      objects: params.objects.length,
+      edges: params.edges.length,
+      links: params.links.length,
+    })
+    const res = await this.diagramClient.applyPlan({
+      orgId: params.orgId,
+      diagrams: params.diagrams,
+      objects: params.objects,
+      edges: params.edges,
+      links: params.links,
+    })
+    const json = j<{ metadata: Record<string, { id: number }> }>(ApplyPlanResponseSchema, res)
+    const refToId: Record<string, number> = {}
+    for (const [ref, meta] of Object.entries(json.metadata ?? {})) {
+      if (meta?.id) refToId[ref] = meta.id
+    }
+    logger.info('ExtensionApiClient', 'applyPlanFull: complete', { createdRefs: Object.keys(refToId).length })
+    return refToId
   }
 }

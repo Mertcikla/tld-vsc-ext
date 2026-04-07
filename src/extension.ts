@@ -8,8 +8,7 @@ import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ObjectLibraryTreeProvider } from './tree/ObjectLibraryTreeProvider'
 import { DiagramObjectTreeProvider } from './tree/DiagramObjectTreeProvider'
 import { WebviewManager } from './webview/WebviewManager'
-import { indexFolder } from './lsp/FolderIndexer'
-import { buildDiagramFromSymbols } from './lsp/DiagramAutoBuilder'
+import { SOURCE_GLOB } from './lsp/symbolMapping'
 import type { DiagramTreeItem } from './tree/DiagramTreeItem'
 import type { ObjectTreeItem } from './tree/ObjectTreeItem'
 
@@ -275,62 +274,52 @@ export function activate(context: vscode.ExtensionContext): void {
       diagramObjectTreeProvider.focusObject(objectId)
     }),
 
-    // Stage 2: Create diagram from folder
-    vscode.commands.registerCommand('tldiagram.createDiagramFromFolder', async (uri: vscode.Uri) => {
-      logger.info('extension', 'Command: createDiagramFromFolder', { path: uri.fsPath })
+    // Call graph diagram from editor cursor
+    vscode.commands.registerCommand('tldiagram.diagramCallGraph', async () => {
+      logger.info('extension', 'Command: diagramCallGraph')
       if (!client) {
         vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
         return
       }
-
-      const folderName = uri.fsPath.split('/').pop() ?? 'New Diagram'
+      const editor = vscode.window.activeTextEditor
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor.')
+        return
+      }
 
       await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: `Creating diagram from "${folderName}"…`,
+          title: 'Building Call Graph…',
           cancellable: true,
         },
         async (progress, token) => {
           try {
-            // Phase 1: index symbols
-            logger.info('extension', 'createDiagramFromFolder: indexing', { folder: uri.fsPath })
-            progress.report({ message: 'Indexing symbols…' })
-            const symbols = await indexFolder(uri, token, (done, total) => {
-              progress.report({ message: `Indexing… ${done}/${total} files` })
-            })
-
-            if (token.isCancellationRequested) {
-              logger.info('extension', 'createDiagramFromFolder: cancelled during indexing')
-              return
-            }
-            if (symbols.length === 0) {
-              logger.warn('extension', 'createDiagramFromFolder: no symbols found', { folder: uri.fsPath })
-              vscode.window.showWarningMessage('No indexable symbols found in this folder.')
+            progress.report({ message: 'Preparing call hierarchy…' })
+            const items = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+              'vscode.prepareCallHierarchy',
+              editor.document.uri,
+              editor.selection.active,
+            )
+            if (!items?.length) {
+              vscode.window.showWarningMessage('No call hierarchy found at cursor position.')
               return
             }
 
-            logger.info('extension', 'createDiagramFromFolder: indexing complete', { symbolCount: symbols.length })
-
-            // Phase 2: create diagram + objects
-            progress.report({ message: `Creating ${symbols.length} objects…` })
-            const orgId = currentOrgId ?? ''
-            const diagramId = await buildDiagramFromSymbols(
+            const maxDepth = vscode.workspace
+              .getConfiguration('tldiagram')
+              .get<number>('callHierarchyMaxDepth', 3)
+            const { buildCallGraphDiagram } = await import('./lsp/CallHierarchyBuilder')
+            const diagramId = await buildCallGraphDiagram(
               client!,
-              folderName,
-              symbols,
-              orgId,
+              items[0],
+              currentOrgId ?? '',
+              maxDepth,
               token,
-              (done, total) => {
-                logger.trace('extension', 'createDiagramFromFolder: objects progress', { done, total })
-                progress.report({ message: `Creating objects… ${done}/${total}` })
-              },
+              (msg) => progress.report({ message: msg }),
             )
 
-            logger.info('extension', 'createDiagramFromFolder: diagram built', { diagramId })
             treeProvider.refresh()
-
-            // Open the new diagram
             const diagrams = await client!.listDiagrams()
             const newDiagram = diagrams.find((d) => d.id === diagramId)
             if (newDiagram) {
@@ -338,13 +327,186 @@ export function activate(context: vscode.ExtensionContext): void {
               await webviewManager.openDiagram(new DiagramTreeItem(newDiagram, 0))
             }
           } catch (e) {
+            if (e instanceof vscode.CancellationError) return
+            logger.error('extension', 'diagramCallGraph failed', { error: String(e) })
+            vscode.window.showErrorMessage(
+              `Failed to create call graph: ${e instanceof Error ? e.message : String(e)}`,
+            )
+          }
+        },
+      )
+    }),
+
+    // Generate architecture diagram from workspace/folder
+    vscode.commands.registerCommand('tldiagram.generateArchitectureDiagram', async (uri?: vscode.Uri) => {
+      logger.info('extension', 'Command: generateArchitectureDiagram')
+      if (!client) {
+        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
+        return
+      }
+
+      // Check tree-sitter availability before doing any work
+      const { TreeSitterQueryLoader } = await import('./lsp/TreeSitterQueryLoader')
+      const tsLoader = new TreeSitterQueryLoader(context.extensionUri, vscode.workspace.workspaceFolders?.[0]?.uri)
+      if (!(await tsLoader.isAvailable())) {
+        const reason = tsLoader.getInitError()
+        vscode.window.showErrorMessage(
+          `tlDiagram: tree-sitter failed to initialize.${reason ? ` Reason: ${reason}` : ''} ` +
+          'Make sure @kreuzberg/tree-sitter-language-pack is installed (`npm install` in vscode-extension/) and the extension was rebuilt (`npm run compile:ext`).',
+        )
+        return
+      }
+
+      // Determine target folder
+      let folderUri: vscode.Uri | undefined = uri
+      if (!folderUri) {
+        const folders = vscode.workspace.workspaceFolders
+        if (!folders?.length) {
+          vscode.window.showErrorMessage('No workspace folder open.')
+          return
+        }
+        if (folders.length === 1) {
+          folderUri = folders[0].uri
+        } else {
+          const pick = await vscode.window.showQuickPick(
+            folders.map((f) => ({ label: f.name, description: f.uri.fsPath, uri: f.uri })),
+            { placeHolder: 'Select workspace root to analyze' },
+          )
+          if (!pick) return
+          folderUri = pick.uri
+        }
+      }
+
+      // Select abstraction level
+      const levelPick = await vscode.window.showQuickPick(
+        [
+          { label: 'Overview', description: 'High-level view, key components only', value: 'overview' as const },
+          { label: 'Standard', description: 'Balanced detail, recommended (default)', value: 'standard' as const },
+          { label: 'Detailed', description: 'Full breakdown including utilities and functions', value: 'detailed' as const },
+        ],
+        { placeHolder: 'Select abstraction level' },
+      )
+      if (!levelPick) return
+
+      // Read settings overrides
+      const settings = vscode.workspace.getConfiguration('tldiagram.architecture')
+      const { resolveConfig } = await import('./lsp/ArchitectureAnalyzer')
+      const config = resolveConfig({
+        abstractionLevel: levelPick.value,
+        callHierarchyDepth: settings.get<number>('callHierarchyDepth'),
+        groupingStrategy: settings.get<'folder' | 'role' | 'hybrid'>('groupingStrategy'),
+        maxObjectsPerDiagram: settings.get<number>('maxObjectsPerDiagram'),
+        targetObjectsPerDiagram: settings.get<number>('targetObjectsPerDiagram'),
+        minObjectsPerDiagram: settings.get<number>('minObjectsPerDiagram'),
+        collapseIntermediates: settings.get<boolean>('collapseIntermediates'),
+        includeExternalLibraries: settings.get<boolean>('includeExternalLibraries'),
+        includeUtilities: settings.get<boolean>('includeUtilities'),
+        importRoleMap: settings.get('importRoleMap'),
+        customRolePatterns: settings.get('customRolePatterns'),
+      })
+
+      const folder = folderUri
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Analyzing architecture (${levelPick.label})…`,
+          cancellable: true,
+        },
+        async (progress, token) => {
+          try {
+            const { ArchitectureAnalyzer } = await import('./lsp/ArchitectureAnalyzer')
+            const analyzer = new ArchitectureAnalyzer(
+              client!,
+              currentOrgId ?? '',
+              config,
+              context.extensionUri,
+            )
+
+            const rootDiagramId = await analyzer.analyze(
+              folder,
+              token,
+              (msg) => progress.report({ message: msg }),
+            )
+
+            treeProvider.refresh()
+            const diagrams = await client!.listDiagrams()
+            const newDiagram = diagrams.find((d) => d.id === rootDiagramId)
+            if (newDiagram) {
+              const { DiagramTreeItem } = await import('./tree/DiagramTreeItem')
+              await webviewManager.openDiagram(new DiagramTreeItem(newDiagram, 0))
+            }
+            logger.info('extension', 'generateArchitectureDiagram: complete', { rootDiagramId })
+          } catch (e) {
             if (e instanceof vscode.CancellationError) {
-              logger.info('extension', 'createDiagramFromFolder: cancelled by user')
+              logger.info('extension', 'generateArchitectureDiagram: cancelled by user')
               return
             }
-            logger.error('extension', 'createDiagramFromFolder failed', { error: String(e) })
+            logger.error('extension', 'generateArchitectureDiagram failed', { error: String(e) })
             vscode.window.showErrorMessage(
-              `Failed to create diagram: ${e instanceof Error ? e.message : String(e)}`,
+              `Architecture analysis failed: ${e instanceof Error ? e.message : String(e)}`,
+            )
+          }
+        },
+      )
+    }),
+
+    // Type hierarchy diagram from editor cursor
+    vscode.commands.registerCommand('tldiagram.diagramTypeHierarchy', async () => {
+      logger.info('extension', 'Command: diagramTypeHierarchy')
+      if (!client) {
+        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
+        return
+      }
+      const editor = vscode.window.activeTextEditor
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor.')
+        return
+      }
+
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Building Type Hierarchy…',
+          cancellable: true,
+        },
+        async (progress, token) => {
+          try {
+            progress.report({ message: 'Preparing type hierarchy…' })
+            const items = await vscode.commands.executeCommand<vscode.TypeHierarchyItem[]>(
+              'vscode.prepareTypeHierarchy',
+              editor.document.uri,
+              editor.selection.active,
+            )
+            if (!items?.length) {
+              vscode.window.showWarningMessage('No type hierarchy found at cursor position.')
+              return
+            }
+
+            const maxDepth = vscode.workspace
+              .getConfiguration('tldiagram')
+              .get<number>('callHierarchyMaxDepth', 3)
+            const { buildTypeHierarchyDiagram } = await import('./lsp/TypeHierarchyBuilder')
+            const diagramId = await buildTypeHierarchyDiagram(
+              client!,
+              items[0],
+              currentOrgId ?? '',
+              maxDepth,
+              token,
+              (msg) => progress.report({ message: msg }),
+            )
+
+            treeProvider.refresh()
+            const diagrams = await client!.listDiagrams()
+            const newDiagram = diagrams.find((d) => d.id === diagramId)
+            if (newDiagram) {
+              const { DiagramTreeItem } = await import('./tree/DiagramTreeItem')
+              await webviewManager.openDiagram(new DiagramTreeItem(newDiagram, 0))
+            }
+          } catch (e) {
+            if (e instanceof vscode.CancellationError) return
+            logger.error('extension', 'diagramTypeHierarchy failed', { error: String(e) })
+            vscode.window.showErrorMessage(
+              `Failed to create type hierarchy: ${e instanceof Error ? e.message : String(e)}`,
             )
           }
         },

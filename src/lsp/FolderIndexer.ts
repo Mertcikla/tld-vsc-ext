@@ -28,10 +28,27 @@ export async function indexFolder(
 
   logger.info('FolderIndexer', 'Starting folder index', { folder: folderUri.fsPath })
 
-  const uris = await vscode.workspace.findFiles(
+  const config = vscode.workspace.getConfiguration('tldiagram')
+  const respectWorkspaceExcludes = config.get<boolean>('respectWorkspaceExcludes', true)
+  const extraExcludes = config.get<string[]>('extraExcludes', [])
+  logger.debug('FolderIndexer', 'Exclude settings', { respectWorkspaceExcludes, extraExcludes })
+
+  let uris = await vscode.workspace.findFiles(
     new vscode.RelativePattern(folderUri, SOURCE_GLOB),
-    `{${EXCLUDE_GLOB}}`,
+    respectWorkspaceExcludes ? null : `{${EXCLUDE_GLOB}}`,
   )
+
+  if (extraExcludes.length > 0) {
+    const excludedUriSet = new Set<string>()
+    for (const pattern of extraExcludes) {
+      const toExclude = await vscode.workspace.findFiles(
+        new vscode.RelativePattern(folderUri, pattern),
+        null,
+      )
+      toExclude.forEach((u) => excludedUriSet.add(u.toString()))
+    }
+    uris = uris.filter((u) => !excludedUriSet.has(u.toString()))
+  }
 
   logger.info('FolderIndexer', 'Files to index', { count: uris.length, folder: folderUri.fsPath })
 
