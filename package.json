@@ -97,23 +97,8 @@
         "title": "Focus on Canvas"
       },
       {
-        "command": "tldiagram.diagramCallGraph",
-        "title": "tlDiagram: Diagram Call Graph",
-        "icon": "$(type-hierarchy-sub)"
-      },
-      {
-        "command": "tldiagram.diagramTypeHierarchy",
-        "title": "tlDiagram: Diagram Type Hierarchy",
-        "icon": "$(type-hierarchy)"
-      },
-      {
         "command": "tldiagram.showLogs",
         "title": "tlDiagram: Show Logs"
-      },
-      {
-        "command": "tldiagram.generateArchitectureDiagram",
-        "title": "tlDiagram: Generate Architecture Diagram",
-        "icon": "$(symbol-structure)"
       }
     ],
     "menus": {
@@ -155,25 +140,6 @@
           "when": "viewItem == diagObject",
           "group": "inline"
         }
-      ],
-      "explorer/context": [
-        {
-          "command": "tldiagram.generateArchitectureDiagram",
-          "when": "explorerResourceIsFolder && tldiagram.authenticated",
-          "group": "tldiagram@1"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "tldiagram.diagramCallGraph",
-          "when": "editorTextFocus && tldiagram.authenticated",
-          "group": "tldiagram@1"
-        },
-        {
-          "command": "tldiagram.diagramTypeHierarchy",
-          "when": "editorTextFocus && tldiagram.authenticated",
-          "group": "tldiagram@2"
-        }
       ]
     },
     "configuration": {
@@ -204,182 +170,6 @@
             "Very verbose: includes every message routed through the bridge and every object created"
           ],
           "description": "Controls verbosity of the tlDiagram output channel. Use 'debug' or 'trace' when reporting issues."
-        },
-        "tldiagram.respectWorkspaceExcludes": {
-          "type": "boolean",
-          "default": true,
-          "description": "When scanning for symbols, respect VS Code's files.exclude, search.exclude settings and .gitignore. When false, only built-in exclusions (node_modules, dist, build, out, .git) apply."
-        },
-        "tldiagram.extraExcludes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Additional glob patterns to exclude from symbol scanning. Example: [\"**/generated/**\", \"**/__mocks__/**\"]"
-        },
-        "tldiagram.callHierarchyMaxDepth": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 10,
-          "description": "Maximum depth when building call graph or type hierarchy diagrams."
-        },
-        "tldiagram.architecture.abstractionLevel": {
-          "type": "string",
-          "default": "standard",
-          "enum": [
-            "overview",
-            "standard",
-            "detailed"
-          ],
-          "enumDescriptions": [
-            "Score-based overview: 5-10 diagrams, 20-50 objects, 30-75 edges",
-            "Score-based standard view: 10-25 diagrams, 40-100 objects, 60-150 edges",
-            "Score-based detailed view: 25-40 diagrams, 100-500 objects, 150-750 edges"
-          ],
-          "description": "Default score profile for architecture diagram generation. It adjusts ranking targets, not parsing or scan depth, and can be overridden per-run via the quick pick."
-        },
-        "tldiagram.architecture.abstractionTargets": {
-          "type": "object",
-          "default": {
-            "overview": {
-              "diagrams": {
-                "min": 5,
-                "max": 10
-              },
-              "objects": {
-                "min": 20,
-                "max": 50
-              },
-              "edges": {
-                "min": 30,
-                "max": 75
-              }
-            },
-            "standard": {
-              "diagrams": {
-                "min": 10,
-                "max": 25
-              },
-              "objects": {
-                "min": 40,
-                "max": 100
-              },
-              "edges": {
-                "min": 60,
-                "max": 150
-              }
-            },
-            "detailed": {
-              "diagrams": {
-                "min": 25,
-                "max": 40
-              },
-              "objects": {
-                "min": 100,
-                "max": 500
-              },
-              "edges": {
-                "min": 150,
-                "max": 750
-              }
-            }
-          },
-          "description": "Optional per-level override for the abstraction score targets. Each min/max range is clamped in code to stay within 2x of the built-in baseline for that level."
-        },
-        "tldiagram.architecture.parserMode": {
-          "type": "string",
-          "default": "auto",
-          "enum": [
-            "auto",
-            "lsp",
-            "treesitter"
-          ],
-          "enumDescriptions": [
-            "Prefer LSP symbol providers, then fall back to Tree-sitter if needed",
-            "Use VS Code language features first, then fall back to Tree-sitter with a warning",
-            "Use Tree-sitter queries first, then fall back to LSP with a warning"
-          ],
-          "description": "Choose how architecture diagrams are parsed. Auto prefers LSP and falls back when necessary."
-        },
-        "tldiagram.architecture.showParserWarnings": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a warning when architecture generation falls back from the requested parser mode to another parser."
-        },
-        "tldiagram.architecture.callHierarchyDepth": {
-          "type": "number",
-          "default": 2,
-          "minimum": 0,
-          "maximum": 5,
-          "description": "Call hierarchy traversal depth for relationship mapping. 0 disables call analysis entirely."
-        },
-        "tldiagram.architecture.groupingStrategy": {
-          "type": "string",
-          "default": "hybrid",
-          "enum": [
-            "folder",
-            "role",
-            "hybrid"
-          ],
-          "enumDescriptions": [
-            "Group by directory structure",
-            "Group by architectural role (API Layer, Services, Data Layer, etc.)",
-            "Folder-first, falling back to role grouping for flat structures"
-          ],
-          "description": "How to cluster symbols into diagram groups."
-        },
-        "tldiagram.architecture.collapseIntermediates": {
-          "type": "boolean",
-          "default": true,
-          "description": "Apply the Platonic filter: collapse pass-through nodes (single in, single out, no side effects) to simplify the graph."
-        },
-        "tldiagram.architecture.includeExternalLibraries": {
-          "type": "boolean",
-          "default": true,
-          "description": "Create an 'External Dependencies' child diagram for detected third-party imports."
-        },
-        "tldiagram.architecture.includeUtilities": {
-          "type": "boolean",
-          "default": false,
-          "description": "Include utility/helper classes in diagrams. Disable for cleaner high-level views."
-        },
-        "tldiagram.architecture.importRoleMap": {
-          "type": "object",
-          "default": {},
-          "description": "Override or extend the default import-path → architectural role mapping. Keys are case-insensitive substrings matched against import paths (e.g. {\"my-db-lib\": \"repository\"}). An empty object uses the built-in defaults."
-        },
-        "tldiagram.architecture.customRolePatterns": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "pattern": {
-                "type": "string",
-                "description": "Regex or substring matched against the file path (case-insensitive)"
-              },
-              "role": {
-                "type": "string",
-                "enum": [
-                  "api_entry",
-                  "service",
-                  "repository",
-                  "data_exit",
-                  "model",
-                  "utility",
-                  "external",
-                  "unknown"
-                ]
-              }
-            },
-            "required": [
-              "pattern",
-              "role"
-            ]
-          },
-          "default": [],
-          "description": "Custom file-path pattern → architectural role overrides. These take highest priority, before tree-sitter queries and import analysis. Example: [{\"pattern\": \"/adapters/\", \"role\": \"repository\"}]"
         }
       }
     }
@@ -391,14 +181,12 @@
     "watch": "node esbuild.mjs --watch",
     "package": "npm run compile && npx @vscode/vsce package",
     "vscode:prepublish": "npm run compile",
-    "test": "vitest run",
-    "arch:parse-local": "tsx src/parsing/treesitter/localArchitectureCli.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
     "@connectrpc/connect": "^2.1.1",
-    "@connectrpc/connect-web": "^2.1.1",
-    "@kreuzberg/tree-sitter-language-pack": "^1.4.1"
+    "@connectrpc/connect-web": "^2.1.1"
   },
   "devDependencies": {
     "@types/node": "^18.0.0",

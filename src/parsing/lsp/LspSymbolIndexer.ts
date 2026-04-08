@@ -1,1 +1,0 @@
-export { indexFolder } from '../../lsp/FolderIndexer.impl'
