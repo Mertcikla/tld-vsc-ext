@@ -2,14 +2,22 @@
   "name": "tldiagram",
   "displayName": "tlDiagram",
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
+  "icon": "resources/logo-1024.png",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Visualization"
+  ],
+  "tags": [
+    "architecture",
+    "diagram",
+    "tlDiagram",
+    "software design",
+    "flow chart"
   ],
   "activationEvents": [
     "onStartupFinished",
