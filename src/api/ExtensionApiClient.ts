@@ -11,6 +11,7 @@ import {
   RenameDiagramResponseSchema,
   CreateObjectResponseSchema,
   ApplyPlanResponseSchema,
+  ListObjectsResponseSchema,
   type PlanDiagram,
   type PlanObject,
   type PlanEdge,
@@ -28,6 +29,13 @@ export interface Diagram {
   created_at: string
   updated_at: string
   parent_diagram_id: number | null
+}
+
+export interface DiagObjectData {
+  id: number
+  name: string
+  type: string
+  technology?: string | null
 }
 
 function j<T>(schema: Parameters<typeof toJson>[0], msg: Parameters<typeof toJson>[1]): T {
@@ -81,6 +89,19 @@ export class ExtensionApiClient {
     }))
     logger.debug('ExtensionApiClient', 'listDiagrams: done', { count: diagrams.length })
     return diagrams
+  }
+
+  async listObjects(): Promise<DiagObjectData[]> {
+    logger.debug('ExtensionApiClient', 'listObjects')
+    const res = await this.diagramClient.listObjects({ limit: 1000 })
+    const objects = (res.objects ?? []).map((o) => ({
+      id: o.id,
+      name: o.name,
+      type: o.type ?? 'Component',
+      technology: o.technology ?? null,
+    }))
+    logger.debug('ExtensionApiClient', 'listObjects: done', { count: objects.length })
+    return objects
   }
 
   async createDiagram(name: string, parentDiagramId?: number): Promise<Diagram> {

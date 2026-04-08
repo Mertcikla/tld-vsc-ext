@@ -83,13 +83,10 @@ export class ObjectLibraryTreeProvider implements vscode.TreeDataProvider<Object
   private async loadObjects(): Promise<void> {
     if (!this.client) return
     try {
-      logger.debug('ObjectLibraryTreeProvider', 'loadObjects: fetching via listDiagrams proxy')
-      const diagrams = await this.client.listDiagrams()
-      void diagrams
-      // TODO: wire to ListObjects RPC once ExtensionApiClient exposes it.
-      this.objects = []
-      this.groupedTypes = []
-      logger.debug('ObjectLibraryTreeProvider', 'loadObjects: done (ListObjects RPC not yet wired)')
+      logger.debug('ObjectLibraryTreeProvider', 'loadObjects: fetching via listObjects')
+      const objects = await this.client.listObjects()
+      this.setObjects(objects)
+      logger.debug('ObjectLibraryTreeProvider', 'loadObjects: done', { count: objects.length })
     } catch (e) {
       logger.error('ObjectLibraryTreeProvider', 'loadObjects failed', { error: String(e) })
       this.objects = []

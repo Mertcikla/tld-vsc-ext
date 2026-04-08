@@ -1,11 +1,7 @@
 import * as vscode from 'vscode'
+import type { DiagObjectData } from '../api/ExtensionApiClient'
 
-export interface DiagObjectData {
-  id: number
-  name: string
-  type: string
-  technology?: string | null
-}
+export { type DiagObjectData }
 
 export class ObjectTreeItem extends vscode.TreeItem {
   constructor(public readonly object: DiagObjectData) {

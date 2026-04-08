@@ -34,10 +34,6 @@
         {
           "id": "tldiagram.objectLibrary",
           "name": "Object Library"
-        },
-        {
-          "id": "tldiagram.diagramObjects",
-          "name": "Diagram Objects"
         }
       ]
     },
@@ -91,10 +87,6 @@
         "command": "tldiagram.addObjectToDiagram",
         "title": "Add to Diagram",
         "icon": "$(add)"
-      },
-      {
-        "command": "tldiagram.focusObject",
-        "title": "Focus on Canvas"
       },
       {
         "command": "tldiagram.showLogs",

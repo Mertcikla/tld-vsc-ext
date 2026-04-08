@@ -6,7 +6,6 @@ import * as crypto from 'crypto'
 import { ExtensionApiClient } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ObjectLibraryTreeProvider } from './tree/ObjectLibraryTreeProvider'
-import { DiagramObjectTreeProvider } from './tree/DiagramObjectTreeProvider'
 import { WebviewManager } from './webview/WebviewManager'
 import type { DiagramTreeItem } from './tree/DiagramTreeItem'
 import type { ObjectTreeItem } from './tree/ObjectTreeItem'
@@ -35,9 +34,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const treeProvider = new DiagramTreeProvider(undefined as unknown as ExtensionApiClient)
   const webviewManager = new WebviewManager(context.extensionUri, authManager, serverUrl)
 
-  const diagramObjectTreeProvider = new DiagramObjectTreeProvider()
-  webviewManager.setDiagramObjectTreeProvider(diagramObjectTreeProvider)
-
   const objectLibraryTreeProvider = new ObjectLibraryTreeProvider(
     undefined,
     webviewManager,
@@ -52,12 +48,8 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: objectLibraryTreeProvider,
     showCollapseAll: false,
   })
-  const diagramObjectsView = vscode.window.createTreeView('tldiagram.diagramObjects', {
-    treeDataProvider: diagramObjectTreeProvider,
-    showCollapseAll: false,
-  })
 
-  context.subscriptions.push(treeView, objectLibraryView, diagramObjectsView)
+  context.subscriptions.push(treeView, objectLibraryView)
 
   // Bootstrap: if a key is already stored, connect silently
   void authManager.getKey().then(async (key) => {
@@ -75,6 +67,7 @@ export function activate(context: vscode.ExtensionContext): void {
       objectLibraryTreeProvider.updateClient(client)
       await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
       treeProvider.refresh()
+      objectLibraryTreeProvider.refresh()
       logger.info('extension', 'Bootstrap successful', { username: user.username, orgId: user.orgId })
     } catch (e) {
       logger.error('extension', 'Bootstrap getMe failed', { error: String(e) })
@@ -119,6 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 objectLibraryTreeProvider.updateClient(client)
                 await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
                 treeProvider.refresh()
+                objectLibraryTreeProvider.refresh()
                 logger.info('extension', 'Login successful', { username: user.username, orgName: user.orgName })
                 vscode.window.showInformationMessage(
                   `Connected to tlDiagram as ${user.username} (${user.orgName})`,
@@ -160,6 +154,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.refresh', () => {
       logger.debug('extension', 'Command: refresh')
       treeProvider.refresh()
+      objectLibraryTreeProvider.refresh()
     }),
 
     vscode.commands.registerCommand('tldiagram.openDiagram', async (item: DiagramTreeItem) => {
@@ -265,12 +260,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.addObjectToDiagram', (item: ObjectTreeItem) => {
       logger.info('extension', 'Command: addObjectToDiagram', { objectId: item.object.id, name: item.object.name })
       objectLibraryTreeProvider.addObjectToDiagram(item.object)
-    }),
-
-    // Stage 3C: Focus object on canvas
-    vscode.commands.registerCommand('tldiagram.focusObject', (objectId: number) => {
-      logger.debug('extension', 'Command: focusObject', { objectId })
-      diagramObjectTreeProvider.focusObject(objectId)
     }),
   )
 

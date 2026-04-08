@@ -5,21 +5,15 @@ import type { DiagramTreeItem } from '../tree/DiagramTreeItem'
 import { getWebviewHtml } from './getWebviewHtml'
 import { MessageRouter } from './MessageRouter'
 import { WorkspaceSymbolService } from './WorkspaceSymbolService'
-import type { DiagramObjectTreeProvider } from '../tree/DiagramObjectTreeProvider'
 
 export class WebviewManager {
   private panels = new Map<number, vscode.WebviewPanel>()
-  private diagramObjectTreeProvider: DiagramObjectTreeProvider | undefined
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly authManager: AuthManager,
     private readonly serverUrl: string,
   ) {}
-
-  setDiagramObjectTreeProvider(provider: DiagramObjectTreeProvider): void {
-    this.diagramObjectTreeProvider = provider
-  }
 
   async openDiagram(item: DiagramTreeItem): Promise<void> {
     const { diagram } = item
@@ -74,14 +68,13 @@ export class WebviewManager {
     // Wire workspace symbol/file handlers
     new WorkspaceSymbolService(postMessage, router)
 
-    // Handle diagram-loaded for native tree view population
+    // Handle diagram-loaded
     router.register('diagram-loaded', (msg) => {
       if (msg.type !== 'diagram-loaded') return
       logger.info('WebviewManager', 'diagram-loaded received', {
         diagramId: msg.diagramId,
         objectCount: msg.objects.length,
       })
-      this.diagramObjectTreeProvider?.setObjects(msg.objects)
     })
 
     panel.webview.onDidReceiveMessage((msg) => {
@@ -91,25 +84,10 @@ export class WebviewManager {
       void router.dispatch(msg)
     })
 
-    // When the active panel changes, notify the tree provider
-    panel.onDidChangeViewState((e) => {
-      const active = e.webviewPanel.active
-      logger.debug('WebviewManager', 'Panel view state changed', { diagramId: diagram.id, active })
-      if (active) {
-        this.diagramObjectTreeProvider?.setPostMessage(postMessage)
-      }
-    })
-    // Set immediately for first open
-    this.diagramObjectTreeProvider?.setPostMessage(postMessage)
-
     this.panels.set(diagram.id, panel)
     panel.onDidDispose(() => {
       logger.info('WebviewManager', 'Panel disposed', { diagramId: diagram.id })
       this.panels.delete(diagram.id)
-      if (this.diagramObjectTreeProvider) {
-        this.diagramObjectTreeProvider.setObjects([])
-        this.diagramObjectTreeProvider.setPostMessage(undefined)
-      }
     })
   }
 }
