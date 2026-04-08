@@ -234,11 +234,59 @@
             "detailed"
           ],
           "enumDescriptions": [
-            "High-level view: key components only, roles collapsed, max ~12 objects per diagram",
-            "Balanced detail: recommended starting point, max ~15 objects per diagram",
-            "Full breakdown: utilities included, all symbol kinds, max ~18 objects per diagram"
+            "Score-based overview: 5-10 diagrams, 20-50 objects, 30-75 edges",
+            "Score-based standard view: 10-25 diagrams, 40-100 objects, 60-150 edges",
+            "Score-based detailed view: 25-40 diagrams, 100-500 objects, 150-750 edges"
           ],
-          "description": "Default abstraction level preset for architecture diagram generation. Can be overridden per-run via the quick pick."
+          "description": "Default score profile for architecture diagram generation. It adjusts ranking targets, not parsing or scan depth, and can be overridden per-run via the quick pick."
+        },
+        "tldiagram.architecture.abstractionTargets": {
+          "type": "object",
+          "default": {
+            "overview": {
+              "diagrams": {
+                "min": 5,
+                "max": 10
+              },
+              "objects": {
+                "min": 20,
+                "max": 50
+              },
+              "edges": {
+                "min": 30,
+                "max": 75
+              }
+            },
+            "standard": {
+              "diagrams": {
+                "min": 10,
+                "max": 25
+              },
+              "objects": {
+                "min": 40,
+                "max": 100
+              },
+              "edges": {
+                "min": 60,
+                "max": 150
+              }
+            },
+            "detailed": {
+              "diagrams": {
+                "min": 25,
+                "max": 40
+              },
+              "objects": {
+                "min": 100,
+                "max": 500
+              },
+              "edges": {
+                "min": 150,
+                "max": 750
+              }
+            }
+          },
+          "description": "Optional per-level override for the abstraction score targets. Each min/max range is clamped in code to stay within 2x of the built-in baseline for that level."
         },
         "tldiagram.architecture.parserMode": {
           "type": "string",
@@ -259,27 +307,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show a warning when architecture generation falls back from the requested parser mode to another parser."
-        },
-        "tldiagram.architecture.targetObjectsPerDiagram": {
-          "type": "number",
-          "default": 10,
-          "minimum": 3,
-          "maximum": 30,
-          "description": "Target number of objects per diagram. Groups are split/merged to approach this number."
-        },
-        "tldiagram.architecture.maxObjectsPerDiagram": {
-          "type": "number",
-          "default": 15,
-          "minimum": 5,
-          "maximum": 50,
-          "description": "Groups exceeding this size are automatically split into sub-diagrams."
-        },
-        "tldiagram.architecture.minObjectsPerDiagram": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 10,
-          "description": "Groups smaller than this are merged into the most-related neighbour."
         },
         "tldiagram.architecture.callHierarchyDepth": {
           "type": "number",

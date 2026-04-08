@@ -1,3 +1,4 @@
+import { abstractionTargetMidpoint, type AbstractionSelectionProfile } from './abstractionTargets'
 import type { ArchitecturalRole } from './roles'
 
 export interface GroupableArchitecturalSymbol {
@@ -14,10 +15,8 @@ export interface ArchitecturalSymbolEdge {
 
 export interface DiagramGroupingConfig {
   groupingStrategy: 'folder' | 'role' | 'hybrid'
-  targetObjectsPerDiagram: number
-  maxObjectsPerDiagram: number
-  minObjectsPerDiagram: number
   includeUtilities: boolean
+  abstractionTargets: AbstractionSelectionProfile
 }
 
 export interface SharedDiagramGroup<TSymbol extends GroupableArchitecturalSymbol> {
@@ -26,6 +25,12 @@ export interface SharedDiagramGroup<TSymbol extends GroupableArchitecturalSymbol
   symbols: TSymbol[]
   centralityScores: Map<string, number>
   representative: TSymbol
+}
+
+type ScoredGroup<TSymbol extends GroupableArchitecturalSymbol> = {
+  key: string
+  score: number
+  scoredSymbols: Array<{ symbol: TSymbol; score: number }>
 }
 
 const ROLE_NAMES: Record<ArchitecturalRole, string> = {
@@ -59,32 +64,97 @@ export function groupArchitecturalSymbols<TSymbol extends GroupableArchitectural
   else if (config.groupingStrategy === 'folder') rawGroups = groupByFolder(filtered)
   else rawGroups = groupByHybrid(filtered)
 
-  let groups = new Map<string, TSymbol[]>()
-  for (const [key, groupSymbols] of rawGroups) {
-    if (groupSymbols.length > config.maxObjectsPerDiagram) {
-      const split = splitGroup(key, groupSymbols, config)
-      for (const [splitKey, splitSymbols] of split) groups.set(splitKey, splitSymbols)
-    } else {
-      groups.set(key, groupSymbols)
-    }
-  }
+  const symbolScores = computeSymbolScores(filtered, edges)
+  const scoredGroups = [...rawGroups.entries()]
+    .map(([key, groupSymbols]) => {
+      const scoredSymbols = groupSymbols
+        .map((symbol) => ({
+          symbol,
+          score: symbolScores.get(architecturalSymbolRef(symbol)) ?? Number.NEGATIVE_INFINITY,
+        }))
+        .filter(({ score }) => Number.isFinite(score))
+        .sort(compareSymbolScores)
 
-  groups = mergeSmallGroups(groups, edges, config)
+      if (scoredSymbols.length === 0) return null
+
+      const score = scoredSymbols.reduce((total, item) => total + item.score, 0) / Math.sqrt(scoredSymbols.length)
+      return { key, score, scoredSymbols }
+    })
+    .filter((entry): entry is ScoredGroup<TSymbol> => entry !== null)
+
+  if (scoredGroups.length === 0) return []
+
+  const diagramTarget = Math.min(
+    scoredGroups.length,
+    Math.max(1, abstractionTargetMidpoint(config.abstractionTargets.diagrams)),
+  )
+  const objectTarget = Math.max(
+    diagramTarget,
+    Math.min(
+      filtered.length,
+      abstractionTargetMidpoint(config.abstractionTargets.objects),
+    ),
+  )
+
+  const selectedGroups = scoredGroups
+    .sort(compareGroupScores)
+    .slice(0, diagramTarget)
+
+  const budgets = allocateSymbolBudgets(selectedGroups, objectTarget)
 
   const result: SharedDiagramGroup<TSymbol>[] = []
-  for (const [key, groupSymbols] of groups) {
-    if (groupSymbols.length === 0) continue
-    const centrality = computeCentrality(groupSymbols, edges)
+  for (const group of selectedGroups) {
+    const budget = budgets.get(group.key) ?? 0
+    const selectedSymbols = group.scoredSymbols.slice(0, budget).map((entry) => entry.symbol)
+    if (selectedSymbols.length === 0) continue
+
+    const centrality = new Map<string, number>()
+    for (const entry of group.scoredSymbols.slice(0, budget)) {
+      centrality.set(architecturalSymbolRef(entry.symbol), entry.score)
+    }
+
     result.push({
-      ref: sanitizeRef(`grp_${key}`),
-      name: groupDisplayName(key),
-      symbols: groupSymbols,
+      ref: sanitizeRef(`grp_${group.key}`),
+      name: groupDisplayName(group.key),
+      symbols: selectedSymbols,
       centralityScores: centrality,
-      representative: pickRepresentative(groupSymbols, centrality),
+      representative: pickRepresentative(selectedSymbols, centrality),
     })
   }
 
-  return result
+  return result.sort((a, b) => compareGroupScores(
+    { key: a.ref, score: groupScoreFromSymbols(a.symbols, a.centralityScores) },
+    { key: b.ref, score: groupScoreFromSymbols(b.symbols, b.centralityScores) },
+  ))
+}
+
+export function selectTopArchitecturalEdges<TSymbol extends GroupableArchitecturalSymbol>(
+  groups: SharedDiagramGroup<TSymbol>[],
+  edges: ArchitecturalSymbolEdge[],
+  profile: AbstractionSelectionProfile,
+): ArchitecturalSymbolEdge[] {
+  const target = Math.min(edges.length, Math.max(1, abstractionTargetMidpoint(profile.edges)))
+  const scoreByRef = new Map<string, number>()
+  const selectedRefs = new Set<string>()
+
+  for (const group of groups) {
+    for (const symbol of group.symbols) {
+      const ref = architecturalSymbolRef(symbol)
+      selectedRefs.add(ref)
+      scoreByRef.set(ref, group.centralityScores.get(ref) ?? 0)
+    }
+  }
+
+  const scoredEdges: Array<{ edge: ArchitecturalSymbolEdge; score: number }> = []
+  for (const edge of edges) {
+    if (!selectedRefs.has(edge.srcRef) || !selectedRefs.has(edge.dstRef)) continue
+    const score = (scoreByRef.get(edge.srcRef) ?? 0) + (scoreByRef.get(edge.dstRef) ?? 0)
+    if (!Number.isFinite(score)) continue
+    scoredEdges.push({ edge, score })
+  }
+
+  scoredEdges.sort((a, b) => b.score - a.score || a.edge.srcRef.localeCompare(b.edge.srcRef) || a.edge.dstRef.localeCompare(b.edge.dstRef))
+  return scoredEdges.slice(0, target).map(({ edge }) => edge)
 }
 
 function groupByFolder<TSymbol extends GroupableArchitecturalSymbol>(symbols: TSymbol[]): Map<string, TSymbol[]> {
@@ -131,128 +201,136 @@ function groupByHybrid<TSymbol extends GroupableArchitecturalSymbol>(symbols: TS
   return folderGroups
 }
 
-function splitGroup<TSymbol extends GroupableArchitecturalSymbol>(
-  key: string,
+function computeSymbolScores<TSymbol extends GroupableArchitecturalSymbol>(
   symbols: TSymbol[],
-  config: Pick<DiagramGroupingConfig, 'maxObjectsPerDiagram' | 'targetObjectsPerDiagram'>,
-): Map<string, TSymbol[]> {
-  if (symbols.length <= config.maxObjectsPerDiagram) {
-    return new Map([[key, symbols]])
-  }
+  edges: ArchitecturalSymbolEdge[],
+): Map<string, number> {
+  const refs = new Set(symbols.map(architecturalSymbolRef))
+  const degreeMap = new Map<string, { incoming: number; outgoing: number }>()
 
-  const subDirMap = new Map<string, TSymbol[]>()
   for (const symbol of symbols) {
-    const parts = symbol.filePath.split('/')
-    const subKey = parts.length > 3 ? parts[2] : parts.length > 2 ? parts[1] : 'root'
-    const current = subDirMap.get(subKey) ?? []
-    current.push(symbol)
-    subDirMap.set(subKey, current)
+    degreeMap.set(architecturalSymbolRef(symbol), { incoming: 0, outgoing: 0 })
   }
 
-  if (subDirMap.size > 1) {
-    const result = new Map<string, TSymbol[]>()
-    for (const [subKey, subSymbols] of subDirMap) {
-      const nested = splitGroup(`${key}_${subKey}`, subSymbols, config)
-      for (const [nestedKey, nestedSymbols] of nested) result.set(nestedKey, nestedSymbols)
-    }
-    return result
-  }
-
-  const roleMap = groupByRole(symbols)
-  if (roleMap.size > 1) {
-    const result = new Map<string, TSymbol[]>()
-    for (const [role, roleSymbols] of roleMap) result.set(`${key}_${role}`, roleSymbols)
-    return result
-  }
-
-  const tempCentrality = computeCentralityRaw(symbols, new Set<string>(), [])
-  const sorted = [...symbols].sort(
-    (a, b) => (tempCentrality.get(architecturalSymbolRef(b)) ?? 0) - (tempCentrality.get(architecturalSymbolRef(a)) ?? 0),
-  )
-  const firstChunk = sorted.slice(0, config.targetObjectsPerDiagram)
-  const secondChunk = sorted.slice(config.targetObjectsPerDiagram)
-  const result = new Map<string, TSymbol[]>()
-  result.set(`${key}_primary`, firstChunk)
-  if (secondChunk.length > 0) result.set(`${key}_secondary`, secondChunk)
-  return result
-}
-
-function mergeSmallGroups<TSymbol extends GroupableArchitecturalSymbol>(
-  groups: Map<string, TSymbol[]>,
-  edges: ArchitecturalSymbolEdge[],
-  config: Pick<DiagramGroupingConfig, 'minObjectsPerDiagram' | 'maxObjectsPerDiagram'>,
-): Map<string, TSymbol[]> {
-  let changed = true
-  while (changed) {
-    changed = false
-    const smallKey = findSmallKey(groups, config.minObjectsPerDiagram)
-    if (!smallKey) break
-
-    const smallSymbols = groups.get(smallKey) ?? []
-    let bestKey: string | null = null
-    let bestScore = -1
-
-    for (const [candidateKey, candidateSymbols] of groups) {
-      if (candidateKey === smallKey) continue
-      if (candidateSymbols.length + smallSymbols.length > config.maxObjectsPerDiagram) continue
-      const score = countCrossEdges(smallSymbols, candidateSymbols, edges)
-      if (score > bestScore) {
-        bestScore = score
-        bestKey = candidateKey
-      }
-    }
-
-    if (!bestKey) {
-      let minSize = Number.POSITIVE_INFINITY
-      for (const [candidateKey, candidateSymbols] of groups) {
-        if (candidateKey === smallKey) continue
-        if (candidateSymbols.length < minSize) {
-          minSize = candidateSymbols.length
-          bestKey = candidateKey
-        }
-      }
-    }
-
-    if (!bestKey) break
-    groups.set(bestKey, [...(groups.get(bestKey) ?? []), ...smallSymbols])
-    groups.delete(smallKey)
-    changed = true
-  }
-
-  return groups
-}
-
-function findSmallKey<TSymbol extends GroupableArchitecturalSymbol>(
-  groups: Map<string, TSymbol[]>,
-  min: number,
-): string | null {
-  for (const [key, symbols] of groups) {
-    if (symbols.length < min) return key
-  }
-  return null
-}
-
-function countCrossEdges<TSymbol extends GroupableArchitecturalSymbol>(
-  a: TSymbol[],
-  b: TSymbol[],
-  edges: ArchitecturalSymbolEdge[],
-): number {
-  const aRefs = new Set(a.map(architecturalSymbolRef))
-  const bRefs = new Set(b.map(architecturalSymbolRef))
-  let count = 0
   for (const edge of edges) {
-    if ((aRefs.has(edge.srcRef) && bRefs.has(edge.dstRef)) || (bRefs.has(edge.srcRef) && aRefs.has(edge.dstRef))) {
-      count++
-    }
+    const source = degreeMap.get(edge.srcRef)
+    const target = degreeMap.get(edge.dstRef)
+    if (source) source.outgoing++
+    if (target) target.incoming++
+    if (!refs.has(edge.srcRef) || !refs.has(edge.dstRef)) continue
   }
-  return count
+
+  const scores = new Map<string, number>()
+  for (const symbol of symbols) {
+    const ref = architecturalSymbolRef(symbol)
+    const { incoming, outgoing } = degreeMap.get(ref) ?? { incoming: 0, outgoing: 0 }
+    const degree = incoming + outgoing
+    scores.set(ref, scoreSymbol(symbol, degree, incoming, outgoing))
+  }
+
+  return scores
+}
+
+function scoreSymbol(
+  symbol: Pick<GroupableArchitecturalSymbol, 'role'>,
+  degree: number,
+  incoming: number,
+  outgoing: number,
+): number {
+  const roleWeights: Record<ArchitecturalRole, number> = {
+    api_entry: 90,
+    service: 75,
+    repository: 68,
+    data_exit: 58,
+    model: 44,
+    utility: 18,
+    external: 12,
+    unknown: 30,
+  }
+
+  let score = roleWeights[symbol.role] + degree * 10 + Math.min(incoming, outgoing) * 4
+
+  if (degree === 0) {
+    score *= 0.1
+  } else if (degree > 5 && degree <= 15) {
+    const excess = degree - 5
+    const multiplier = 0.9 - (excess / 10) * 0.8
+    score *= Math.max(0.05, multiplier)
+  } else if (degree > 15) {
+    return Number.NEGATIVE_INFINITY
+  }
+
+  return score
+}
+
+function compareGroupScores(
+  a: { score: number; key: string },
+  b: { score: number; key: string },
+): number {
+  return b.score - a.score || a.key.localeCompare(b.key)
+}
+
+function compareSymbolScores(
+  a: { score: number; symbol: GroupableArchitecturalSymbol },
+  b: { score: number; symbol: GroupableArchitecturalSymbol },
+): number {
+  return b.score - a.score
+    || a.symbol.role.localeCompare(b.symbol.role)
+    || a.symbol.filePath.localeCompare(b.symbol.filePath)
+    || a.symbol.name.localeCompare(b.symbol.name)
+}
+
+function allocateSymbolBudgets<TSymbol extends GroupableArchitecturalSymbol>(
+  groups: Array<{ key: string; score: number; scoredSymbols: Array<{ symbol: TSymbol; score: number }> }>,
+  objectTarget: number,
+): Map<string, number> {
+  const budgets = new Map<string, number>()
+  if (groups.length === 0 || objectTarget <= 0) return budgets
+
+  const capacity = groups.reduce((total, group) => total + group.scoredSymbols.length, 0)
+  let remaining = Math.min(objectTarget, capacity)
+  const ordered = [...groups].sort(compareGroupScores)
+
+  for (const group of ordered) {
+    if (remaining <= 0) break
+    budgets.set(group.key, 1)
+    remaining--
+  }
+
+  while (remaining > 0) {
+    let progressed = false
+    for (const group of ordered) {
+      const current = budgets.get(group.key) ?? 0
+      if (current >= group.scoredSymbols.length) continue
+      budgets.set(group.key, current + 1)
+      remaining--
+      progressed = true
+      if (remaining === 0) break
+    }
+
+    if (!progressed) break
+  }
+
+  return budgets
+}
+
+function groupScoreFromSymbols<TSymbol extends GroupableArchitecturalSymbol>(
+  symbols: TSymbol[],
+  scores: Map<string, number>,
+): number {
+  if (symbols.length === 0) return Number.NEGATIVE_INFINITY
+  let total = 0
+  for (const symbol of symbols) {
+    total += scores.get(architecturalSymbolRef(symbol)) ?? 0
+  }
+  return total / Math.sqrt(symbols.length)
 }
 
 function computeCentrality<TSymbol extends GroupableArchitecturalSymbol>(
   symbols: TSymbol[],
   edges: ArchitecturalSymbolEdge[],
 ): Map<string, number> {
-  return computeCentralityRaw(symbols, new Set(symbols.map(architecturalSymbolRef)), edges)
+  return computeSymbolScores(symbols, edges)
 }
 
 function computeCentralityRaw<TSymbol extends GroupableArchitecturalSymbol>(
@@ -260,25 +338,8 @@ function computeCentralityRaw<TSymbol extends GroupableArchitecturalSymbol>(
   refs: Set<string>,
   edges: ArchitecturalSymbolEdge[],
 ): Map<string, number> {
-  const scores = new Map<string, number>()
-  for (const symbol of symbols) {
-    scores.set(architecturalSymbolRef(symbol), 0)
-  }
-
-  for (const edge of edges) {
-    if (refs.has(edge.srcRef)) scores.set(edge.srcRef, (scores.get(edge.srcRef) ?? 0) + 1)
-    if (refs.has(edge.dstRef)) scores.set(edge.dstRef, (scores.get(edge.dstRef) ?? 0) + 1)
-  }
-
-  for (const symbol of symbols) {
-    const key = architecturalSymbolRef(symbol)
-    let score = scores.get(key) ?? 0
-    if (symbol.role === 'api_entry') score *= 2
-    else if (symbol.role === 'repository') score = Math.round(score * 1.5)
-    scores.set(key, score)
-  }
-
-  return scores
+  const selected = symbols.filter((symbol) => refs.has(architecturalSymbolRef(symbol)))
+  return computeSymbolScores(selected, edges)
 }
 
 function pickRepresentative<TSymbol extends GroupableArchitecturalSymbol>(

@@ -12,8 +12,8 @@ export type DiagramGroup = SharedDiagramGroup<ClassifiedSymbol>
 export interface GrouperConfig extends DiagramGroupingConfig {}
 
 /**
- * Groups ClassifiedSymbols into diagram-sized DiagramGroups.
- * Enforces min/max density constraints by splitting and merging.
+ * Groups ClassifiedSymbols into score-ranked DiagramGroups.
+ * The shared selector trims the result to the requested abstraction targets.
  */
 export function groupSymbols(
   symbols: ClassifiedSymbol[],

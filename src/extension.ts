@@ -386,14 +386,12 @@ export function activate(context: vscode.ExtensionContext): void {
         showParserWarnings: settings.get<boolean>('showParserWarnings'),
         callHierarchyDepth: settings.get<number>('callHierarchyDepth'),
         groupingStrategy: settings.get<'folder' | 'role' | 'hybrid'>('groupingStrategy'),
-        maxObjectsPerDiagram: settings.get<number>('maxObjectsPerDiagram'),
-        targetObjectsPerDiagram: settings.get<number>('targetObjectsPerDiagram'),
-        minObjectsPerDiagram: settings.get<number>('minObjectsPerDiagram'),
         collapseIntermediates: settings.get<boolean>('collapseIntermediates'),
         includeExternalLibraries: settings.get<boolean>('includeExternalLibraries'),
         includeUtilities: settings.get<boolean>('includeUtilities'),
         importRoleMap: settings.get('importRoleMap'),
         customRolePatterns: settings.get('customRolePatterns'),
+        abstractionTargets: settings.get('abstractionTargets'),
       })
 
       const folder = folderUri

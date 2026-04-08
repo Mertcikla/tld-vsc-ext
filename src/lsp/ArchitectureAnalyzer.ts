@@ -20,80 +20,55 @@ import { groupSymbols } from './DiagramGrouper'
 import { collectExternalLibraries, detectGoModulePath } from './ImportParser'
 import { buildRelationshipGraph } from './RelationshipMapper'
 import { DEFAULT_IMPORT_ROLE_MAP } from '../parsing/shared/defaultImportRoleMap'
+import {
+  DEFAULT_ABSTRACTION_SELECTION_PROFILES,
+  resolveAbstractionSelectionProfile,
+  type AbstractionLevel,
+  type AbstractionSelectionProfile,
+} from '../parsing/shared/abstractionTargets'
+import { selectTopArchitecturalEdges } from '../parsing/shared/diagramGrouping'
 import type { ArchitecturalRole } from '../parsing/shared/roles'
 import { RoleClassifier } from './RoleClassifier'
 import type { CustomRolePattern } from './RoleClassifier'
 import { SOURCE_GLOB } from './symbolMapping'
 
 export interface ArchitectureAnalysisConfig {
-  abstractionLevel: 'overview' | 'standard' | 'detailed'
+  abstractionLevel: AbstractionLevel
+  abstractionTargets: AbstractionSelectionProfile
   parserMode: ArchitectureParserMode
   showParserWarnings: boolean
-  targetObjectsPerDiagram: number
-  maxObjectsPerDiagram: number
-  minObjectsPerDiagram: number
   callHierarchyDepth: number
   groupingStrategy: 'folder' | 'role' | 'hybrid'
   collapseIntermediates: boolean
   includeExternalLibraries: boolean
   includeUtilities: boolean
-  minSymbolKinds: 'classes' | 'all'
   disablePathHeuristics?: boolean
   importRoleMap: Record<string, ArchitecturalRole>
   customRolePatterns: CustomRolePattern[]
 }
 
-export const PRESETS: Record<'overview' | 'standard' | 'detailed', Partial<ArchitectureAnalysisConfig>> = {
-  overview: {
-    callHierarchyDepth: 1,
-    collapseIntermediates: true,
-    includeUtilities: false,
-    minSymbolKinds: 'classes',
-    targetObjectsPerDiagram: 8,
-    maxObjectsPerDiagram: 12,
-    minObjectsPerDiagram: 2,
-  },
-  standard: {
-    callHierarchyDepth: 2,
-    collapseIntermediates: true,
-    includeUtilities: false,
-    minSymbolKinds: 'classes',
-    targetObjectsPerDiagram: 10,
-    maxObjectsPerDiagram: 15,
-    minObjectsPerDiagram: 3,
-  },
-  detailed: {
-    callHierarchyDepth: 3,
-    collapseIntermediates: false,
-    includeUtilities: true,
-    minSymbolKinds: 'all',
-    targetObjectsPerDiagram: 12,
-    maxObjectsPerDiagram: 18,
-    minObjectsPerDiagram: 3,
-  },
-}
-
 const BASE_CONFIG: ArchitectureAnalysisConfig = {
   abstractionLevel: 'standard',
+  abstractionTargets: DEFAULT_ABSTRACTION_SELECTION_PROFILES.standard,
   parserMode: 'auto',
   showParserWarnings: true,
-  targetObjectsPerDiagram: 10,
-  maxObjectsPerDiagram: 15,
-  minObjectsPerDiagram: 3,
   callHierarchyDepth: 2,
   groupingStrategy: 'hybrid',
   collapseIntermediates: true,
   includeExternalLibraries: true,
   includeUtilities: false,
-  minSymbolKinds: 'classes',
   importRoleMap: DEFAULT_IMPORT_ROLE_MAP,
   customRolePatterns: [],
 }
 
 export function resolveConfig(overrides: Partial<ArchitectureAnalysisConfig>): ArchitectureAnalysisConfig {
   const level = overrides.abstractionLevel ?? BASE_CONFIG.abstractionLevel
-  const preset = PRESETS[level] ?? {}
-  return { ...BASE_CONFIG, ...preset, ...overrides }
+  return {
+    ...BASE_CONFIG,
+    ...overrides,
+    abstractionLevel: level,
+    abstractionTargets: resolveAbstractionSelectionProfile(level, overrides.abstractionTargets),
+  }
 }
 
 export class ArchitectureAnalyzer {
@@ -144,10 +119,10 @@ export class ArchitectureAnalyzer {
       throw new Error('No indexable symbols found in this folder.')
     }
 
-    const filteredSymbols = this.filterIndexedSymbols(rawSymbols)
+    const filteredSymbols = rawSymbols
     logger.info('ArchitectureAnalyzer', 'Phase 1 done', {
       raw: rawSymbols.length,
-      filtered: filteredSymbols.length,
+      candidate: filteredSymbols.length,
       parserMode: parserResolution.resolvedMode,
     })
 
@@ -216,22 +191,25 @@ export class ArchitectureAnalyzer {
     logger.info('ArchitectureAnalyzer', 'Phase 5: grouping')
     const grouperConfig: GrouperConfig = {
       groupingStrategy: this.config.groupingStrategy,
-      targetObjectsPerDiagram: this.config.targetObjectsPerDiagram,
-      maxObjectsPerDiagram: this.config.maxObjectsPerDiagram,
-      minObjectsPerDiagram: this.config.minObjectsPerDiagram,
       includeUtilities: this.config.includeUtilities,
+      abstractionTargets: this.config.abstractionTargets,
     }
     const groups = groupSymbols(classified, graph, grouperConfig)
+
+    const selectedEdges = selectTopArchitecturalEdges(groups, graph.edges, this.config.abstractionTargets)
 
     if (groups.length === 0) {
       throw new Error('No symbol groups found. Try "Detailed" level or a different folder.')
     }
 
-    logger.info('ArchitectureAnalyzer', 'Phase 5 done', { groups: groups.length })
+    logger.info('ArchitectureAnalyzer', 'Phase 5 done', {
+      groups: groups.length,
+      edges: selectedEdges.length,
+    })
 
     onProgress('Assembling plan…')
     logger.info('ArchitectureAnalyzer', 'Phase 6: plan assembly')
-    const plan = buildArchitecturePlan(groups, graph, externalLibraries, {
+    const plan = buildArchitecturePlan(groups, selectedEdges, externalLibraries, {
       levelLabel: this.config.abstractionLevel.charAt(0).toUpperCase() + this.config.abstractionLevel.slice(1),
       includeExternalLibraries: this.config.includeExternalLibraries,
       projectName,
@@ -266,19 +244,6 @@ export class ArchitectureAnalyzer {
       rootDiagramId,
       parser: parserResolution,
     }
-  }
-
-  private filterIndexedSymbols(rawSymbols: IndexedSymbol[]): IndexedSymbol[] {
-    const classesOnly = new Set([
-      vscode.SymbolKind.Class,
-      vscode.SymbolKind.Struct,
-      vscode.SymbolKind.Interface,
-      vscode.SymbolKind.Module,
-    ])
-
-    return this.config.minSymbolKinds === 'classes'
-      ? rawSymbols.filter((s) => classesOnly.has(s.kind))
-      : rawSymbols
   }
 
   private async indexSymbols(

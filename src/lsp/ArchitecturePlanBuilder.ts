@@ -1,6 +1,6 @@
 import { kindToObjectType } from './symbolMapping'
 import type { DiagramGroup } from './DiagramGrouper'
-import type { RelationshipGraph, SymbolEdge } from './RelationshipMapper'
+import type { ArchitecturalSymbolEdge } from '../parsing/shared/diagramGrouping'
 import type { ExternalLibrary } from './ImportParser'
 import type { ClassifiedSymbol } from './RoleClassifier'
 
@@ -55,7 +55,7 @@ const GRID_COLS = 5
  */
 export function buildArchitecturePlan(
   groups: DiagramGroup[],
-  graph: RelationshipGraph,
+  selectedEdges: ArchitecturalSymbolEdge[],
   externalLibraries: Map<string, ExternalLibrary>,
   config: {
     levelLabel: string
@@ -176,11 +176,11 @@ export function buildArchitecturePlan(
     }
   }
 
-  const edges: PlanEdgeInput[] = []
+  const planEdges: PlanEdgeInput[] = []
 
   // Root-level edges: between cluster objects for cross-group dependencies
   const rootEdgeSet = new Set<string>()
-  for (const edge of graph.edges) {
+  for (const edge of selectedEdges) {
     const srcGroupRef = symRefToGroupRef.get(edge.srcRef)
     const dstGroupRef = symRefToGroupRef.get(edge.dstRef)
 
@@ -190,7 +190,7 @@ export function buildArchitecturePlan(
       const edgeKey = `${srcCluster}::${dstCluster}`
       if (!rootEdgeSet.has(edgeKey)) {
         rootEdgeSet.add(edgeKey)
-        edges.push({
+        planEdges.push({
           diagramRef: ROOT_REF,
           sourceObjectRef: srcCluster,
           targetObjectRef: dstCluster,
@@ -206,7 +206,7 @@ export function buildArchitecturePlan(
     const externalLibNames = new Set([...externalLibraries.keys()].map((n) => sanitizeRef(`ext_${n}`)))
     const groupsWithExternalDeps = new Set<string>()
 
-    for (const edge of graph.edges) {
+    for (const edge of selectedEdges) {
       const dstObjRef = symRefToObjRef.get(edge.dstRef)
       if (dstObjRef && externalLibNames.has(dstObjRef)) {
         const srcGroupRef = symRefToGroupRef.get(edge.srcRef)
@@ -220,7 +220,7 @@ export function buildArchitecturePlan(
       const edgeKey = `${srcCluster}::${extClusterRef}`
       if (!rootEdgeSet.has(edgeKey)) {
         rootEdgeSet.add(edgeKey)
-        edges.push({
+        planEdges.push({
           diagramRef: ROOT_REF,
           sourceObjectRef: srcCluster,
           targetObjectRef: extClusterRef,
@@ -234,7 +234,7 @@ export function buildArchitecturePlan(
     const groupSymRefs = new Set(group.symbols.map(symbolKey))
     const groupEdgeSet = new Set<string>()
 
-    for (const edge of graph.edges) {
+    for (const edge of selectedEdges) {
       const srcInGroup = groupSymRefs.has(edge.srcRef)
       const dstInGroup = groupSymRefs.has(edge.dstRef)
 
@@ -246,7 +246,7 @@ export function buildArchitecturePlan(
         const edgeKey = `${srcObjRef}::${dstObjRef}`
         if (!groupEdgeSet.has(edgeKey)) {
           groupEdgeSet.add(edgeKey)
-          edges.push({
+          planEdges.push({
             diagramRef: group.ref,
             sourceObjectRef: srcObjRef,
             targetObjectRef: dstObjRef,
@@ -273,7 +273,7 @@ export function buildArchitecturePlan(
     })
   }
 
-  return { diagrams, objects, edges, links }
+  return { diagrams, objects, edges: planEdges, links }
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────────

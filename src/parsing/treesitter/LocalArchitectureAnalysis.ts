@@ -2,9 +2,15 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { globSync } from 'glob'
 import { countArchitectureArtifacts } from '../shared/architectureMetrics'
+import {
+  resolveAbstractionSelectionProfile,
+  type AbstractionLevel,
+  type AbstractionSelectionProfileOverrides,
+} from '../shared/abstractionTargets'
 import { DEFAULT_IMPORT_ROLE_MAP } from '../shared/defaultImportRoleMap'
 import {
   groupArchitecturalSymbols,
+  selectTopArchitecturalEdges,
   type SharedDiagramGroup,
 } from '../shared/diagramGrouping'
 import {
@@ -46,16 +52,17 @@ type SymbolEdge = {
 
 export interface LocalArchitectureAnalysisOptions {
   repo: string
-  level?: 'overview' | 'standard' | 'detailed'
+  level?: AbstractionLevel
   parserMode?: ArchitectureParserMode
   includeExternalLibraries?: boolean
   groupingStrategy?: 'folder' | 'role' | 'hybrid'
   disablePathHeuristics?: boolean
+  abstractionTargets?: AbstractionSelectionProfileOverrides
 }
 
 export interface LocalArchitectureAnalysisResult {
   repo: string
-  level: 'overview' | 'standard' | 'detailed'
+  level: AbstractionLevel
   parserMode: ResolvedArchitectureParserMode
   filesScanned: number
   indexedSymbols: number
@@ -70,35 +77,9 @@ export interface LocalArchitectureAnalysisResult {
 const SOURCE_GLOB = '**/*.{ts,tsx,js,jsx,go,py,rs,java,kt,swift,cpp,cc,cxx,c,h,hpp,cs,rb,vue}'
 const DEFAULT_EXCLUDES = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/out/**', '**/.git/**', '**/vendor/**', '**/target/**', '**/tmp/**']
 
-const PRESETS = {
-  overview: {
-    callHierarchyDepth: 1,
-    collapseIntermediates: true,
-    includeUtilities: false,
-    minSymbolKinds: 'all',
-    targetObjectsPerDiagram: 8,
-    maxObjectsPerDiagram: 12,
-    minObjectsPerDiagram: 2,
-  },
-  standard: {
-    callHierarchyDepth: 2,
-    collapseIntermediates: true,
-    includeUtilities: false,
-    minSymbolKinds: 'all',
-    targetObjectsPerDiagram: 10,
-    maxObjectsPerDiagram: 15,
-    minObjectsPerDiagram: 3,
-  },
-  detailed: {
-    callHierarchyDepth: 3,
-    collapseIntermediates: false,
-    includeUtilities: true,
-    minSymbolKinds: 'all',
-    targetObjectsPerDiagram: 12,
-    maxObjectsPerDiagram: 18,
-    minObjectsPerDiagram: 3,
-  },
-} as const
+const CALL_HIERARCHY_DEPTH = 2
+const COLLAPSE_INTERMEDIATES = true
+const INCLUDE_UTILITIES = false
 
 let packPromise: Promise<KreuzbergModule> | null = null
 
@@ -248,7 +229,10 @@ export async function analyzeLocalArchitecture(
     throw new Error('Local benchmark runner does not support parserMode=lsp outside the VS Code host. Use parserMode=treesitter for the local path.')
   }
 
-  const preset = PRESETS[level]
+  const abstractionTargets = resolveAbstractionSelectionProfile(
+    level,
+    options.abstractionTargets ?? null,
+  )
   const includeExternalLibraries = options.includeExternalLibraries ?? true
   const groupingStrategy = options.groupingStrategy ?? 'hybrid'
   const disablePathHeuristics = options.disablePathHeuristics ?? false
@@ -365,7 +349,7 @@ export async function analyzeLocalArchitecture(
   }
 
   let edges: SymbolEdge[] = []
-  if (preset.callHierarchyDepth > 0) {
+  if (CALL_HIERARCHY_DEPTH > 0) {
     const edgeSet = new Set<string>()
     const allPaths = [...symbolsByFile.keys()]
     for (const [filePath, sourceSymbols] of symbolsByFile.entries()) {
@@ -393,21 +377,21 @@ export async function analyzeLocalArchitecture(
     }
   }
 
-  if (preset.collapseIntermediates) {
+  if (COLLAPSE_INTERMEDIATES) {
     edges = applyPlatonicFilter(edges, classified)
   }
 
   const groups = groupArchitecturalSymbols(classified, edges, {
     groupingStrategy,
-    targetObjectsPerDiagram: preset.targetObjectsPerDiagram,
-    maxObjectsPerDiagram: preset.maxObjectsPerDiagram,
-    minObjectsPerDiagram: preset.minObjectsPerDiagram,
-    includeUtilities: preset.includeUtilities,
+    includeUtilities: INCLUDE_UTILITIES,
+    abstractionTargets,
   })
+
+  const selectedEdges = selectTopArchitecturalEdges(groups, edges, abstractionTargets)
 
   const counts = countArchitectureArtifacts(
     groups as Array<Pick<SharedDiagramGroup<ClassifiedLocalSymbol>, 'ref' | 'symbols'>>,
-    edges,
+    selectedEdges,
     externalLibraries.size,
     includeExternalLibraries,
   )
