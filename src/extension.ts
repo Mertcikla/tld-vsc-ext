@@ -114,9 +114,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 treeProvider.refresh()
                 objectLibraryTreeProvider.refresh()
                 logger.info('extension', 'Login successful', { username: user.username, orgName: user.orgName })
-                vscode.window.showInformationMessage(
-                  `Connected to tlDiagram as ${user.username} (${user.orgName})`,
-                )
+                vscode.window.showInformationMessage('Connected to tlDiagram')
                 resolve()
               } catch (e) {
                 logger.error('extension', 'Login failed', { error: String(e) })
