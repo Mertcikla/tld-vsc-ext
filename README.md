@@ -1,13 +1,13 @@
 # tlDiagram for VS Code
 
-Browse and edit [tlDiagram](https://tldiagram.com) architecture diagrams without leaving VS Code. The extension opens diagrams in a retained webview panel, exposes your diagram hierarchy and reusable objects in native sidebar views, and lets you link diagram objects to workspace files and symbols from inside the editor.
+Browse and edit [tlDiagram](https://tldiagram.com) architecture views without leaving VS Code. The extension opens retained webview panels for views, exposes the workspace view hierarchy and reusable elements in native sidebar views, and lets you attach source links to placed elements from inside the editor.
 
 This repository contains the VS Code extension host. The React webview is built from the sibling `../frontend` workspace and emitted into `out/webview/`.
 
 ## Features
 
 ### Diagram editor in a webview panel
-Open any diagram from the Diagrams tree and the full React canvas loads inside VS Code. The panel uses `retainContextWhenHidden`, so selection and canvas state are preserved when you switch tabs.
+Open any view from the hierarchy tree and the full React canvas loads inside VS Code. The panel uses `retainContextWhenHidden`, so selection and canvas state are preserved when you switch tabs.
 
 The VS Code build trims web-only chrome and relies on native commands and tree views for the extension-specific experience.
 
@@ -16,8 +16,8 @@ The extension contributes two views in the **tlDiagram** activity bar container:
 
 | View | What it shows |
 |---|---|
-| **Diagrams** | Diagram hierarchy, including parent/child relationships, with create, rename, delete, open, and open-in-browser actions |
-| **Object Library** | Reusable objects grouped by type, with an **Add to Diagram** action that places the object into the active diagram |
+| **Diagrams** | Workspace view hierarchy, including parent/child relationships, with create, rename, delete, open, and open-in-browser actions |
+| **Object Library** | Reusable elements grouped by type, with an **Add to Diagram** action that places the element into the active view |
 
 ### Workspace source linking
 Inside the webview, the source picker can browse workspace files and ask VS Code for symbols in the selected file. The selected link is stored in the same shape the web app uses, so links work in both environments.
