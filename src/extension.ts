@@ -234,7 +234,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.openInBrowser', (item: DiagramTreeItem) => {
-      const url = `${serverUrl}/app/diagrams/${item.diagram.id}`
+      const url = `${serverUrl}/app/views/${item.diagram.id}`
       logger.info('extension', 'Command: openInBrowser', { id: item.diagram.id, url })
       void vscode.env.openExternal(vscode.Uri.parse(url))
     }),
