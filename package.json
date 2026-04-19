@@ -85,14 +85,6 @@
         "icon": "$(link-external)"
       },
       {
-        "command": "tldiagram.exportDiagram",
-        "title": "tlDiagram: Export Diagram"
-      },
-      {
-        "command": "tldiagram.importDiagram",
-        "title": "tlDiagram: Import Diagram"
-      },
-      {
         "command": "tldiagram.addElementToDiagram",
         "title": "Add to Diagram",
         "icon": "$(add)"
