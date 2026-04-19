@@ -45,6 +45,16 @@ function j<T>(schema: Parameters<typeof toJson>[0], msg: Parameters<typeof toJso
   return toJson(schema, msg, { useProtoFieldName: true, emitDefaultValues: true }) as unknown as T
 }
 
+function normalizeElementType(kind?: string | null, type?: string | null): string {
+  const normalizedKind = kind?.trim()
+  if (normalizedKind) return normalizedKind
+
+  const normalizedType = type?.trim()
+  if (normalizedType) return normalizedType
+
+  return 'Component'
+}
+
 export class ExtensionApiClient {
   private readonly workspaceClient
 
@@ -80,7 +90,7 @@ export class ExtensionApiClient {
   async listDiagrams(): Promise<Diagram[]> {
     logger.debug('ExtensionApiClient', 'listDiagrams')
     const res = await this.workspaceClient.listViews({})
-    const diagrams = (res.diagrams ?? []).map((d) => ({
+    const diagrams = (res.views ?? []).map((d) => ({
       id: d.id,
       name: d.name,
       description: d.description ?? null,
@@ -101,7 +111,7 @@ export class ExtensionApiClient {
     const elements = (json.elements ?? []).map((o) => ({
       id: o.id,
       name: o.name,
-      type: o.type ?? o.kind ?? 'Component',
+      type: normalizeElementType(o.kind, o.type),
       technology: o.technology ?? null,
       repo: o.repo ?? null,
       branch: o.branch ?? null,

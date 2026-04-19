@@ -43,6 +43,11 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
     return element
   }
 
+  private normalizeType(type: string): string {
+    const trimmed = type.trim()
+    return trimmed ? trimmed : 'Component'
+  }
+
   async getChildren(element?: ElementTreeItem | vscode.TreeItem): Promise<(ElementTreeItem | vscode.TreeItem)[]> {
     if (!this.client) {
       logger.trace('ElementLibraryTreeProvider', 'getChildren: no client — returning empty')
@@ -58,12 +63,13 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
         groups: this.groupedTypes,
       })
       return this.groupedTypes.map((type) => {
+        const label = this.normalizeType(type)
         const item = new vscode.TreeItem(
-          type.charAt(0).toUpperCase() + type.slice(1),
+          label.charAt(0).toUpperCase() + label.slice(1),
           vscode.TreeItemCollapsibleState.Expanded,
         )
         item.contextValue = 'elementTypeGroup'
-        item.id = `group::${type}`
+        item.id = `group::${label}`
         return item
       })
     }
@@ -100,9 +106,10 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
     const seen = new Set<string>()
     this.groupedTypes = []
     for (const o of elements) {
-      if (!seen.has(o.type)) {
-        seen.add(o.type)
-        this.groupedTypes.push(o.type)
+      const type = this.normalizeType(o.type)
+      if (!seen.has(type)) {
+        seen.add(type)
+        this.groupedTypes.push(type)
       }
     }
     logger.debug('ElementLibraryTreeProvider', 'setElements: type groups', { groups: this.groupedTypes })
