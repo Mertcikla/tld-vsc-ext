@@ -73,7 +73,7 @@ export class WebviewManager {
       if (msg.type !== 'diagram-loaded') return
       logger.info('WebviewManager', 'diagram-loaded received', {
         diagramId: msg.diagramId,
-        objectCount: msg.objects.length,
+        elementCount: msg.elements.length,
       })
     })
 
@@ -89,5 +89,12 @@ export class WebviewManager {
       logger.info('WebviewManager', 'Panel disposed', { diagramId: diagram.id })
       this.panels.delete(diagram.id)
     })
+  }
+
+  postMessageToDiagram(diagramId: number, message: any): void {
+    const panel = this.panels.get(diagramId)
+    if (panel) {
+      panel.webview.postMessage(message)
+    }
   }
 }

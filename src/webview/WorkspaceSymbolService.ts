@@ -104,5 +104,44 @@ export class WorkspaceSymbolService {
         })
       }
     })
+
+    router.register('request-file-content', async (msg) => {
+      if (msg.type !== 'request-file-content') return
+      logger.debug('WorkspaceSymbolService', 'request-file-content', {
+        requestId: msg.requestId,
+        filePath: msg.filePath,
+        startLine: msg.startLine
+      })
+
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
+      if (!workspaceRoot) {
+        this.postMessage({ type: 'file-content', requestId: msg.requestId, content: '', startLineOffset: 0 })
+        return
+      }
+      
+      const fileUri = vscode.Uri.joinPath(workspaceRoot, msg.filePath)
+      try {
+        const fileData = await vscode.workspace.fs.readFile(fileUri)
+        const fileContent = Buffer.from(fileData).toString('utf-8')
+        const lines = fileContent.split(/\r?\n/)
+        
+        const lineLimit = 10
+        const startLine = msg.startLine || 0
+        const start = Math.max(0, startLine - lineLimit)
+        const end = Math.min(lines.length, startLine + lineLimit + 1)
+        
+        const windowLines = lines.slice(start, end).join('\n')
+        
+        this.postMessage({ 
+          type: 'file-content', 
+          requestId: msg.requestId, 
+          content: windowLines, 
+          startLineOffset: start // 0-based offset for UI to use
+        })
+      } catch (e) {
+        logger.error('WorkspaceSymbolService', 'request-file-content failed', { error: String(e) })
+        this.postMessage({ type: 'file-content', requestId: msg.requestId, content: '', startLineOffset: 0 })
+      }
+    })
   }
 }

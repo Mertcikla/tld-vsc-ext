@@ -12,6 +12,7 @@ import {
   CreateElementResponseSchema,
   ApplyPlanResponseSchema,
   ListElementsResponseSchema,
+  ListElementPlacementsResponseSchema,
   type PlanElement,
   type PlanConnector,
 } from '../../../frontend/src/gen/diag/v1/workspace_service_pb'
@@ -29,11 +30,15 @@ export interface Diagram {
   parent_diagram_id: number | null
 }
 
-export interface DiagObjectData {
+export interface DiagElementData {
   id: number
   name: string
   type: string
   technology?: string | null
+  repo?: string | null
+  branch?: string | null
+  language?: string | null
+  file_path?: string | null
 }
 
 function j<T>(schema: Parameters<typeof toJson>[0], msg: Parameters<typeof toJson>[1]): T {
@@ -89,18 +94,29 @@ export class ExtensionApiClient {
     return diagrams
   }
 
-  async listObjects(): Promise<DiagObjectData[]> {
-    logger.debug('ExtensionApiClient', 'listObjects')
+  async listElements(): Promise<DiagElementData[]> {
+    logger.debug('ExtensionApiClient', 'listElements')
     const res = await this.workspaceClient.listElements({ limit: 1000 })
-    const json = j<{ elements: Array<{ id: number; name: string; type?: string | null; kind?: string | null; technology?: string | null }> }>(ListElementsResponseSchema, res)
-    const objects = (json.elements ?? []).map((o) => ({
+    const json = j<{ elements: Array<{ id: number; name: string; type?: string | null; kind?: string | null; technology?: string | null; repo?: string | null; branch?: string | null; language?: string | null; file_path?: string | null }> }>(ListElementsResponseSchema, res)
+    const elements = (json.elements ?? []).map((o) => ({
       id: o.id,
       name: o.name,
       type: o.type ?? o.kind ?? 'Component',
       technology: o.technology ?? null,
+      repo: o.repo ?? null,
+      branch: o.branch ?? null,
+      language: o.language ?? null,
+      file_path: o.file_path ?? null,
     }))
-    logger.debug('ExtensionApiClient', 'listObjects: done', { count: objects.length })
-    return objects
+    logger.debug('ExtensionApiClient', 'listElements: done', { count: elements.length })
+    return elements
+  }
+
+  async listElementPlacements(elementId: number): Promise<{ view_id: number; view_name: string }[]> {
+    logger.debug('ExtensionApiClient', 'listElementPlacements', { elementId })
+    const res = await this.workspaceClient.listElementPlacements({ elementId })
+    const json = j<{ placements: Array<{ view_id: number; view_name: string }> }>(ListElementPlacementsResponseSchema, res)
+    return json.placements ?? []
   }
 
   async createDiagram(name: string, parentDiagramId?: number): Promise<Diagram> {
@@ -125,12 +141,12 @@ export class ExtensionApiClient {
     logger.debug('ExtensionApiClient', 'deleteDiagram: done')
   }
 
-  async createObject(props: {
+  async createElement(props: {
     name: string
     type?: string
     filePath?: string
   }): Promise<{ id: number }> {
-    logger.debug('ExtensionApiClient', 'createObject', { name: props.name, type: props.type })
+    logger.debug('ExtensionApiClient', 'createElement', { name: props.name, type: props.type })
     const res = await this.workspaceClient.createElement({
       name: props.name,
       type: props.type,
@@ -139,12 +155,12 @@ export class ExtensionApiClient {
       tags: [],
     })
     const json = j<{ element: { id: number } }>(CreateElementResponseSchema, res)
-    logger.trace('ExtensionApiClient', 'createObject: created', { id: json.element.id })
+    logger.trace('ExtensionApiClient', 'createElement: created', { id: json.element.id })
     return { id: json.element.id }
   }
 
-  async addObjectToDiagram(diagramId: number, objectId: number, x: number, y: number): Promise<void> {
-    logger.trace('ExtensionApiClient', 'addObjectToDiagram', { diagramId, objectId, x, y })
+  async addElementToDiagram(diagramId: number, objectId: number, x: number, y: number): Promise<void> {
+    logger.trace('ExtensionApiClient', 'addElementToDiagram', { diagramId, objectId, x, y })
     await this.workspaceClient.createPlacement({ diagramId, objectId, positionX: x, positionY: y })
   }
 

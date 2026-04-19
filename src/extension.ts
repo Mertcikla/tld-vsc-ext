@@ -5,10 +5,13 @@ import { AuthUriHandler } from './auth/AuthUriHandler'
 import * as crypto from 'crypto'
 import { ExtensionApiClient } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
-import { ObjectLibraryTreeProvider } from './tree/ObjectLibraryTreeProvider'
+import { ElementLibraryTreeProvider } from './tree/ElementLibraryTreeProvider'
 import { WebviewManager } from './webview/WebviewManager'
 import type { DiagramTreeItem } from './tree/DiagramTreeItem'
-import type { ObjectTreeItem } from './tree/ObjectTreeItem'
+import type { ElementTreeItem } from './tree/ElementTreeItem'
+import { GitContextService } from './GitContextService'
+import { ElementCacheService } from './ElementCacheService'
+import { TLDiagramCodeLensProvider } from './TLDiagramCodeLensProvider'
 
 function getServerUrl(): string {
   return vscode.workspace
@@ -34,7 +37,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const treeProvider = new DiagramTreeProvider(undefined as unknown as ExtensionApiClient)
   const webviewManager = new WebviewManager(context.extensionUri, authManager, serverUrl)
 
-  const objectLibraryTreeProvider = new ObjectLibraryTreeProvider(
+  const gitService = new GitContextService()
+  const elementCacheService = new ElementCacheService(undefined as unknown as ExtensionApiClient, gitService)
+  
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      { language: '*' },
+      new TLDiagramCodeLensProvider(elementCacheService)
+    )
+  )
+
+  const elementLibraryTreeProvider = new ElementLibraryTreeProvider(
     undefined,
     webviewManager,
   )
@@ -44,12 +57,12 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
   })
-  const objectLibraryView = vscode.window.createTreeView('tldiagram.objectLibrary', {
-    treeDataProvider: objectLibraryTreeProvider,
+  const elementLibraryView = vscode.window.createTreeView('tldiagram.elementLibrary', {
+    treeDataProvider: elementLibraryTreeProvider,
     showCollapseAll: false,
   })
 
-  context.subscriptions.push(treeView, objectLibraryView)
+  context.subscriptions.push(treeView, elementLibraryView)
 
   // Bootstrap: if a key is already stored, connect silently
   void authManager.getKey().then(async (key) => {
@@ -64,10 +77,10 @@ export function activate(context: vscode.ExtensionContext): void {
       client = newClient
       currentOrgId = user.orgId
       treeProvider.updateClient(client)
-      objectLibraryTreeProvider.updateClient(client)
+      elementLibraryTreeProvider.updateClient(client)
       await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
       treeProvider.refresh()
-      objectLibraryTreeProvider.refresh()
+      elementLibraryTreeProvider.refresh()
       logger.info('extension', 'Bootstrap successful', { username: user.username, orgId: user.orgId })
     } catch (e) {
       logger.error('extension', 'Bootstrap getMe failed', { error: String(e) })
@@ -109,10 +122,12 @@ export function activate(context: vscode.ExtensionContext): void {
                 client = candidateClient
                 currentOrgId = user.orgId
                 treeProvider.updateClient(client)
-                objectLibraryTreeProvider.updateClient(client)
+                elementLibraryTreeProvider.updateClient(client)
+                elementCacheService.updateClient(client)
                 await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
                 treeProvider.refresh()
-                objectLibraryTreeProvider.refresh()
+                elementLibraryTreeProvider.refresh()
+                void elementCacheService.refresh()
                 logger.info('extension', 'Login successful', { username: user.username, orgName: user.orgName })
                 vscode.window.showInformationMessage('Connected to tlDiagram')
                 resolve()
@@ -143,7 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
       client = undefined
       currentOrgId = undefined
       treeProvider.clear()
-      objectLibraryTreeProvider.refresh()
+      elementLibraryTreeProvider.refresh()
       await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', false)
       vscode.window.showInformationMessage('Disconnected from tlDiagram.')
       logger.info('extension', 'Logout complete')
@@ -152,7 +167,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.refresh', () => {
       logger.debug('extension', 'Command: refresh')
       treeProvider.refresh()
-      objectLibraryTreeProvider.refresh()
+      elementLibraryTreeProvider.refresh()
     }),
 
     vscode.commands.registerCommand('tldiagram.openDiagram', async (item: DiagramTreeItem) => {
@@ -255,9 +270,56 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     // Stage 3B: Add object from tree view to active diagram
-    vscode.commands.registerCommand('tldiagram.addObjectToDiagram', (item: ObjectTreeItem) => {
-      logger.info('extension', 'Command: addObjectToDiagram', { objectId: item.object.id, name: item.object.name })
-      objectLibraryTreeProvider.addObjectToDiagram(item.object)
+    vscode.commands.registerCommand('tldiagram.addElementToDiagram', (item: ElementTreeItem) => {
+      logger.info('extension', 'Command: addElementToDiagram', { elementId: item.element.id, name: item.element.name })
+      elementLibraryTreeProvider.addElementToDiagram(item.element)
+    }),
+
+    vscode.commands.registerCommand('tldiagram.goToDiagram', async (args?: { elementId?: number }) => {
+      logger.info('extension', 'Command: goToDiagram', args)
+      if (!args || typeof args.elementId !== 'number') {
+        vscode.window.showErrorMessage('No element selected.')
+        return
+      }
+      if (!client) {
+        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
+        return
+      }
+
+      try {
+        const placements = await client.listElementPlacements(args.elementId)
+        if (placements.length === 0) {
+          vscode.window.showInformationMessage('This element is not in any diagrams.')
+          return
+        }
+
+        let selectedDiagramId: string | undefined = undefined;
+        let selectedDiagramName: string | undefined = undefined;
+
+        if (placements.length === 1) {
+          selectedDiagramId = String(placements[0].view_id)
+          selectedDiagramName = placements[0].view_name
+        } else {
+          // Show quick pick
+          const items = placements.map(d => ({ label: d.view_name, description: String(d.view_id), diagramId: String(d.view_id) }))
+          const selected = await vscode.window.showQuickPick(items, { placeHolder: 'Select a diagram to open' })
+          if (!selected) return
+          selectedDiagramId = selected.diagramId
+          selectedDiagramName = selected.label
+        }
+
+        if (selectedDiagramId && selectedDiagramName) {
+           await webviewManager.openDiagram({ diagram: { id: Number(selectedDiagramId), name: selectedDiagramName } } as DiagramTreeItem)
+           
+           // Wait a moment and then send focus-element
+           setTimeout(() => {
+              webviewManager.postMessageToDiagram(Number(selectedDiagramId!), { type: 'focus-element', elementId: args.elementId! })
+           }, 1000)
+        }
+      } catch (e) {
+        logger.error('extension', 'goToDiagram failed', { error: String(e) })
+        vscode.window.showErrorMessage(`Failed to go to diagram: ${e instanceof Error ? e.message : String(e)}`)
+      }
     }),
   )
 

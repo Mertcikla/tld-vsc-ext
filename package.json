@@ -41,8 +41,8 @@
           "name": "Diagrams"
         },
         {
-          "id": "tldiagram.objectLibrary",
-          "name": "Object Library"
+          "id": "tldiagram.elementLibrary",
+          "name": "Element Library"
         }
       ]
     },
@@ -93,9 +93,13 @@
         "title": "tlDiagram: Import Diagram"
       },
       {
-        "command": "tldiagram.addObjectToDiagram",
+        "command": "tldiagram.addElementToDiagram",
         "title": "Add to Diagram",
         "icon": "$(add)"
+      },
+      {
+        "command": "tldiagram.goToDiagram",
+        "title": "Go to Diagram"
       },
       {
         "command": "tldiagram.showLogs",
@@ -103,6 +107,20 @@
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "tldiagram.goToDiagram",
+          "when": "tldiagram.authenticated",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "tldiagram.goToDiagram",
+          "when": "tldiagram.authenticated",
+          "group": "navigation"
+        }
+      ],
       "view/title": [
         {
           "command": "tldiagram.refresh",
@@ -137,8 +155,8 @@
           "group": "1_modify"
         },
         {
-          "command": "tldiagram.addObjectToDiagram",
-          "when": "viewItem == diagObject",
+          "command": "tldiagram.addElementToDiagram",
+          "when": "viewItem == diagElement",
           "group": "inline"
         }
       ]
