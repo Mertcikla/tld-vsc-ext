@@ -2,7 +2,7 @@
   "name": "tldiagram",
   "displayName": "tlDiagram",
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
   "icon": "resources/logo-1024.png",
@@ -41,8 +41,8 @@
           "name": "Diagrams"
         },
         {
-          "id": "tldiagram.objectLibrary",
-          "name": "Object Library"
+          "id": "tldiagram.elementLibrary",
+          "name": "Element Library"
         }
       ]
     },
@@ -85,24 +85,44 @@
         "icon": "$(link-external)"
       },
       {
-        "command": "tldiagram.exportDiagram",
-        "title": "tlDiagram: Export Diagram"
-      },
-      {
-        "command": "tldiagram.importDiagram",
-        "title": "tlDiagram: Import Diagram"
-      },
-      {
-        "command": "tldiagram.addObjectToDiagram",
+        "command": "tldiagram.addElementToDiagram",
         "title": "Add to Diagram",
         "icon": "$(add)"
       },
       {
+        "command": "tldiagram.goToDiagram",
+        "title": "Go to Diagram"
+      },
+      {
         "command": "tldiagram.showLogs",
         "title": "tlDiagram: Show Logs"
+      },
+      {
+        "command": "tldiagram.analyzeFolder",
+        "title": "tlDiagram: Analyze Folder",
+        "icon": "$(search)"
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "tldiagram.goToDiagram",
+          "when": "tldiagram.authenticated",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "tldiagram.goToDiagram",
+          "when": "tldiagram.authenticated",
+          "group": "navigation"
+        },
+        {
+          "command": "tldiagram.analyzeFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        }
+      ],
       "view/title": [
         {
           "command": "tldiagram.refresh",
@@ -137,8 +157,8 @@
           "group": "1_modify"
         },
         {
-          "command": "tldiagram.addObjectToDiagram",
-          "when": "viewItem == diagObject",
+          "command": "tldiagram.addElementToDiagram",
+          "when": "viewItem == diagElement",
           "group": "inline"
         }
       ]
