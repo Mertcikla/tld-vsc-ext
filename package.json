@@ -2,7 +2,7 @@
   "name": "tldiagram",
   "displayName": "tlDiagram",
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
   "icon": "resources/logo-1024.png",
