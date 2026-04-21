@@ -2,14 +2,11 @@
 
 Browse and edit [tlDiagram](https://tldiagram.com) architecture diagrams without leaving VS Code. The extension opens diagrams in a retained webview panel, exposes your diagram hierarchy and reusable objects in native sidebar views, and lets you link diagram objects to workspace files and symbols from inside the editor.
 
-This repository contains the VS Code extension host. The React webview is built from the sibling `../frontend` workspace and emitted into `out/webview/`.
-
+![alt text](image.png)
 ## Features
 
 ### Diagram editor in a webview panel
-Open any diagram from the Diagrams tree and the full React canvas loads inside VS Code. The panel uses `retainContextWhenHidden`, so selection and canvas state are preserved when you switch tabs.
-
-The VS Code build trims web-only chrome and relies on native commands and tree views for the extension-specific experience.
+Open any diagram from the Diagrams tree and the full React canvas loads inside VS Code.
 
 ### Native sidebar tree views
 The extension contributes two views in the **tlDiagram** activity bar container:
@@ -44,8 +41,6 @@ All extension activity is written to the **tlDiagram** output channel. The verbo
 | `Delete Diagram` | Diagram item context menu | Delete the selected diagram |
 | `Add to Diagram` | Object Library item context menu | Place the selected object into the active diagram |
 | `tlDiagram: Show Logs` | Command palette | Open the tlDiagram output channel |
-| `tlDiagram: Export Diagram` | Command palette | Stubbed for future work |
-| `tlDiagram: Import Diagram` | Command palette | Stubbed for future work |
 
 
 ## Requirements
