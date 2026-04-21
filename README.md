@@ -1,23 +1,20 @@
 # tlDiagram for VS Code
 
-Browse and edit [tlDiagram](https://tldiagram.com) architecture views without leaving VS Code. The extension opens retained webview panels for views, exposes the workspace view hierarchy and reusable elements in native sidebar views, and lets you attach source links to placed elements from inside the editor.
+Browse and edit [tlDiagram](https://tldiagram.com) architecture diagrams without leaving VS Code. Use the `tld-cli` to easily create a diagram of a directory. Switch between diagrams and code with symbol link support.  
 
-This repository contains the VS Code extension host. The React webview is built from the sibling `../frontend` workspace and emitted into `out/webview/`.
-
+![alt text](image.png)
 ## Features
 
 ### Diagram editor in a webview panel
-Open any view from the hierarchy tree and the full React canvas loads inside VS Code. The panel uses `retainContextWhenHidden`, so selection and canvas state are preserved when you switch tabs.
-
-The VS Code build trims web-only chrome and relies on native commands and tree views for the extension-specific experience.
+Open any diagram from the Diagrams tree and the full React canvas loads inside VS Code.
 
 ### Native sidebar tree views
 The extension contributes two views in the **tlDiagram** activity bar container:
 
 | View | What it shows |
 |---|---|
-| **Diagrams** | Workspace view hierarchy, including parent/child relationships, with create, rename, delete, open, and open-in-browser actions |
-| **Object Library** | Reusable elements grouped by type, with an **Add to Diagram** action that places the element into the active view |
+| **Diagrams** | Diagram hierarchy, including parent/child relationships, with create, rename, delete, open, and open-in-browser actions |
+| **Element Library** | Reusable elements grouped by type, with an **Add to Diagram** action that places the object into the active diagram |
 
 ### Workspace source linking
 Inside the webview, the source picker can browse workspace files and ask VS Code for symbols in the selected file. The selected link is stored in the same shape the web app uses, so links work in both environments.
@@ -44,12 +41,11 @@ All extension activity is written to the **tlDiagram** output channel. The verbo
 | `Delete Diagram` | Diagram item context menu | Delete the selected diagram |
 | `Add to Diagram` | Object Library item context menu | Place the selected object into the active diagram |
 | `tlDiagram: Show Logs` | Command palette | Open the tlDiagram output channel |
-| `tlDiagram: Export Diagram` | Command palette | Stubbed for future work |
-| `tlDiagram: Import Diagram` | Command palette | Stubbed for future work |
 
 
 ## Requirements
 
 - VS Code 1.85+
 - A tlDiagram account
+- tld-cli if you want to automatically create diagrams from source. 
 - The extension and webview bundles must be built before loading from source
