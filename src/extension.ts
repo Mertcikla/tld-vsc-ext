@@ -6,7 +6,7 @@ import * as crypto from 'crypto'
 import * as cp from 'child_process'
 import * as util from 'util'
 const execAsync = util.promisify(cp.exec)
-import { ExtensionApiClient } from './api/ExtensionApiClient'
+import { ExtensionApiClient, type DiagElementData } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ElementLibraryTreeProvider } from './tree/ElementLibraryTreeProvider'
 import { WebviewManager } from './webview/WebviewManager'
@@ -21,6 +21,36 @@ function getServerUrl(): string {
     .getConfiguration('tldiagram')
     .get<string>('serverUrl', 'https://tldiagram.com')
     .replace(/\/$/, '')
+}
+
+function logCommandOutput(command: string, stream: 'stdout' | 'stderr', output: string): void {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+
+  for (const line of lines) {
+    if (stream === 'stderr') {
+      logger.warn('extension', `${command} ${stream}`, { line })
+    } else {
+      logger.info('extension', `${command} ${stream}`, { line })
+    }
+  }
+}
+
+async function execLogged(command: string, options?: cp.ExecOptions): Promise<{ stdout: string; stderr: string }> {
+  logger.info('extension', 'Running command', { command, cwd: options?.cwd })
+  try {
+    const result = await execAsync(command, options)
+    logCommandOutput(command, 'stdout', result.stdout)
+    logCommandOutput(command, 'stderr', result.stderr)
+    return result
+  } catch (error) {
+    const execError = error as cp.ExecException & { stdout?: string; stderr?: string }
+    logCommandOutput(command, 'stdout', execError.stdout ?? '')
+    logCommandOutput(command, 'stderr', execError.stderr ?? '')
+    throw error
+  }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -42,6 +72,120 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const gitService = new GitContextService()
   const elementCacheService = new ElementCacheService(undefined as unknown as ExtensionApiClient, gitService)
+
+  const findInnermostSymbol = (
+    symbols: vscode.DocumentSymbol[],
+    position: vscode.Position,
+  ): vscode.DocumentSymbol | undefined => {
+    for (const symbol of symbols) {
+      if (!symbol.range.contains(position)) {
+        continue
+      }
+
+      const childMatch = findInnermostSymbol(symbol.children, position)
+      return childMatch ?? symbol
+    }
+
+    return undefined
+  }
+
+  const getWorkspaceRelativePath = (uri: vscode.Uri): string | undefined => {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (!workspaceRoot) {
+      return undefined
+    }
+
+    const absPath = uri.fsPath
+    if (!absPath.startsWith(workspaceRoot + '/')) {
+      return undefined
+    }
+
+    return absPath.slice(workspaceRoot.length + 1)
+  }
+
+  const pickElement = async (
+    elements: DiagElementData[],
+    placeHolder: string,
+  ): Promise<DiagElementData | undefined> => {
+    if (elements.length === 0) {
+      return undefined
+    }
+
+    if (elements.length === 1) {
+      return elements[0]
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      elements.map((element) => ({
+        label: element.name,
+        description: `Element ${element.id}`,
+        element,
+      })),
+      { placeHolder },
+    )
+
+    return picked?.element
+  }
+
+  const resolveElementForGoToDiagram = async (
+    args?: { elementId?: number; elementName?: string } | vscode.Uri,
+  ): Promise<DiagElementData | undefined> => {
+    if (args && !vscode.Uri.isUri(args) && typeof args.elementId === 'number') {
+      return { id: args.elementId, name: args.elementName ?? `Element ${args.elementId}` }
+    }
+
+    const targetUri = vscode.Uri.isUri(args)
+      ? args
+      : vscode.window.activeTextEditor?.document.uri
+    if (!targetUri) {
+      return undefined
+    }
+
+    const relPath = getWorkspaceRelativePath(targetUri)
+    if (!relPath) {
+      return undefined
+    }
+
+    const activeEditor = vscode.window.activeTextEditor
+    const isActiveTarget = !!activeEditor && activeEditor.document.uri.toString() === targetUri.toString()
+    if (!isActiveTarget) {
+      return pickElement(
+        elementCacheService.getElementsForFile(relPath),
+        `Select an element from ${relPath}`,
+      )
+    }
+
+    const selection = activeEditor.selection
+    const position = selection.isEmpty ? selection.active : selection.start
+    const rawSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+      'vscode.executeDocumentSymbolProvider',
+      targetUri,
+    )
+    const symbols = rawSymbols ?? []
+    const selectedSymbol = findInnermostSymbol(symbols, position)
+    const selectedText = selection.isEmpty
+      ? undefined
+      : activeEditor.document.getText(selection).trim()
+
+    if (selectedSymbol) {
+      const element = await pickElement(
+        elementCacheService.getElementsForSymbol(relPath, selectedSymbol.name),
+        `Select an element for ${selectedSymbol.name}`,
+      )
+      if (element) {
+        return element
+      }
+    }
+
+    if (selectedText) {
+      return pickElement(
+        elementCacheService.getElementsForSymbol(relPath, selectedText),
+        `Select an element for ${selectedText}`,
+      )
+    }
+
+    return undefined
+  }
   
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider(
@@ -81,9 +225,11 @@ export function activate(context: vscode.ExtensionContext): void {
       currentOrgId = user.orgId
       treeProvider.updateClient(client)
       elementLibraryTreeProvider.updateClient(client)
+      elementCacheService.updateClient(client)
       await vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
       treeProvider.refresh()
       elementLibraryTreeProvider.refresh()
+      void elementCacheService.refresh()
       logger.info('extension', 'Bootstrap successful', { username: user.username, orgId: user.orgId })
     } catch (e) {
       logger.error('extension', 'Bootstrap getMe failed', { error: String(e) })
@@ -278,19 +424,21 @@ export function activate(context: vscode.ExtensionContext): void {
       elementLibraryTreeProvider.addElementToDiagram(item.element)
     }),
 
-    vscode.commands.registerCommand('tldiagram.goToDiagram', async (args?: { elementId?: number }) => {
+    vscode.commands.registerCommand('tldiagram.goToDiagram', async (args?: { elementId?: number; elementName?: string } | vscode.Uri) => {
       logger.info('extension', 'Command: goToDiagram', args)
-      if (!args || typeof args.elementId !== 'number') {
-        vscode.window.showErrorMessage('No element selected.')
-        return
-      }
       if (!client) {
         vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
         return
       }
 
       try {
-        const placements = await client.listElementPlacements(args.elementId)
+        const element = await resolveElementForGoToDiagram(args)
+        if (!element) {
+          vscode.window.showErrorMessage('No tlDiagram element found for the current selection.')
+          return
+        }
+
+        const placements = await client.listElementPlacements(element.id)
         if (placements.length === 0) {
           vscode.window.showInformationMessage('This element is not in any diagrams.')
           return
@@ -316,7 +464,7 @@ export function activate(context: vscode.ExtensionContext): void {
            
            // Wait a moment and then send focus-element
            setTimeout(() => {
-              webviewManager.postMessageToDiagram(Number(selectedDiagramId!), { type: 'focus-element', elementId: args.elementId! })
+              webviewManager.postMessageToDiagram(Number(selectedDiagramId!), { type: 'focus-element', elementId: element.id })
            }, 1000)
         }
       } catch (e) {
@@ -342,7 +490,7 @@ export function activate(context: vscode.ExtensionContext): void {
         { location: vscode.ProgressLocation.Notification, title: `tlDiagram: Analyzing workspace...`, cancellable: false },
         async () => {
           try {
-            await execAsync(`tld --version`)
+            await execLogged(`tld --version`)
           } catch (err) {
             vscode.window.showErrorMessage('The "tld" CLI was not found on your PATH. Please install standard tld release to use this feature.')
             return
@@ -351,7 +499,7 @@ export function activate(context: vscode.ExtensionContext): void {
           try {
             // 1. Run tld init
             try {
-               await execAsync(`tld init`, { cwd: targetPath })
+              await execLogged(`tld init`, { cwd: targetPath })
             } catch (initErr: any) {
                if (!initErr.message?.includes('already exists')) {
                   throw new Error(`Init failed: ${initErr.message}`)
@@ -359,10 +507,10 @@ export function activate(context: vscode.ExtensionContext): void {
             }
 
             // 2. Run tld analyze
-            await execAsync(`tld analyze .`, { cwd: targetPath })
+            await execLogged(`tld analyze .`, { cwd: targetPath })
 
             // 3. Apply changes automatically
-            await execAsync(`tld apply --force`, { cwd: targetPath })
+            await execLogged(`tld apply --force`, { cwd: targetPath })
 
             vscode.window.showInformationMessage(`Successfully analyzed and synced code models!`)
             treeProvider.refresh()

@@ -19,6 +19,10 @@ export class ElementCacheService {
     this.client = client
   }
 
+  private normalizePath(filePath: string): string {
+    return filePath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '')
+  }
+
   async refresh(): Promise<void> {
     try {
       logger.debug('ElementCacheService', 'Refreshing cache')
@@ -42,7 +46,9 @@ export class ElementCacheService {
         // It matches the workspace context (or it's a pure workspace link without repo/branch)
         // Extract the file path before the anchor
         const anchorIdx = el.file_path.indexOf('#')
-        const relPath = anchorIdx !== -1 ? el.file_path.substring(0, anchorIdx) : el.file_path
+        const relPath = this.normalizePath(
+          anchorIdx !== -1 ? el.file_path.substring(0, anchorIdx) : el.file_path,
+        )
 
         const existing = this.fileIndex.get(relPath) || []
         existing.push(el)
@@ -60,7 +66,35 @@ export class ElementCacheService {
   }
 
   getElementsForFile(relPath: string): DiagElementData[] {
-    return this.fileIndex.get(relPath) || []
+    const normalizedPath = this.normalizePath(relPath)
+    const exactMatch = this.fileIndex.get(normalizedPath)
+    if (exactMatch) {
+      return exactMatch
+    }
+
+    let bestMatchLength = -1
+    const matchedElements: DiagElementData[] = []
+    for (const [indexedPath, elements] of this.fileIndex.entries()) {
+      if (normalizedPath === indexedPath || normalizedPath.endsWith(`/${indexedPath}`)) {
+        if (indexedPath.length > bestMatchLength) {
+          bestMatchLength = indexedPath.length
+          matchedElements.length = 0
+          matchedElements.push(...elements)
+        } else if (indexedPath.length === bestMatchLength) {
+          matchedElements.push(...elements)
+        }
+      }
+    }
+
+    if (matchedElements.length > 0) {
+      logger.debug('ElementCacheService', 'Resolved file elements via suffix match', {
+        requestedPath: normalizedPath,
+        matchedCount: matchedElements.length,
+        matchLength: bestMatchLength,
+      })
+    }
+
+    return matchedElements
   }
 
   getElementsForSymbol(relPath: string, symbolName: string): DiagElementData[] {

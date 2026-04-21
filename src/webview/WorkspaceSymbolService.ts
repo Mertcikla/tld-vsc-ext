@@ -5,6 +5,24 @@ import type { WorkspaceSymbol } from '../../../frontend/src/types/vscode-message
 
 type PostMessageFn = (msg: unknown) => void
 
+function flattenDocumentSymbols(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] {
+  const flattened: vscode.DocumentSymbol[] = []
+
+  const visit = (nodes: vscode.DocumentSymbol[]) => {
+    for (const node of nodes) {
+      flattened.push(node)
+      visit(node.children)
+    }
+  }
+
+  visit(symbols)
+  return flattened
+}
+
+function normalizeSymbolKind(kind: string | undefined): string | undefined {
+  return kind?.replace(/\s+/g, '').toLowerCase()
+}
+
 /**
  * Handles workspace-related messages from the webview:
  *  - request-workspace-files  → findFiles → workspace-files response
@@ -12,6 +30,43 @@ type PostMessageFn = (msg: unknown) => void
  *  - open-file → showTextDocument at the given line
  */
 export class WorkspaceSymbolService {
+  private async resolveSymbolStartLine(
+    fileUri: vscode.Uri,
+    symbolName: string,
+    symbolKind?: string,
+  ): Promise<number | undefined> {
+    try {
+      const rawSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+        'vscode.executeDocumentSymbolProvider',
+        fileUri,
+      )
+      const symbols = flattenDocumentSymbols(rawSymbols ?? [])
+      const normalizedKind = normalizeSymbolKind(symbolKind)
+      const exactMatch = symbols.find((symbol) => {
+        if (symbol.name !== symbolName) {
+          return false
+        }
+        if (!normalizedKind) {
+          return true
+        }
+        return normalizeSymbolKind(vscode.SymbolKind[symbol.kind]) === normalizedKind
+      })
+      if (exactMatch) {
+        return exactMatch.selectionRange.start.line
+      }
+
+      return symbols.find((symbol) => symbol.name === symbolName)?.selectionRange.start.line
+    } catch (e) {
+      logger.warn('WorkspaceSymbolService', 'resolveSymbolStartLine failed', {
+        filePath: fileUri.fsPath,
+        symbolName,
+        symbolKind,
+        error: String(e),
+      })
+      return undefined
+    }
+  }
+
   constructor(
     private readonly postMessage: PostMessageFn,
     router: MessageRouter,
@@ -59,11 +114,11 @@ export class WorkspaceSymbolService {
           'vscode.executeDocumentSymbolProvider',
           fileUri,
         )
-        const symbols: WorkspaceSymbol[] = (rawSymbols ?? []).map((s) => ({
+        const symbols: WorkspaceSymbol[] = flattenDocumentSymbols(rawSymbols ?? []).map((s) => ({
           name: s.name,
           kind: vscode.SymbolKind[s.kind],
           filePath: msg.filePath,
-          startLine: s.range.start.line,
+          startLine: s.selectionRange.start.line,
         }))
         logger.debug('WorkspaceSymbolService', 'workspace-symbols response', {
           requestId: msg.requestId,
@@ -82,7 +137,12 @@ export class WorkspaceSymbolService {
 
     router.register('open-file', async (msg) => {
       if (msg.type !== 'open-file') return
-      logger.info('WorkspaceSymbolService', 'open-file', { filePath: msg.filePath, startLine: msg.startLine })
+      logger.info('WorkspaceSymbolService', 'open-file', {
+        filePath: msg.filePath,
+        startLine: msg.startLine,
+        symbolName: msg.symbolName,
+        symbolKind: msg.symbolKind,
+      })
 
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
       if (!workspaceRoot) {
@@ -90,13 +150,24 @@ export class WorkspaceSymbolService {
         return
       }
       const fileUri = vscode.Uri.joinPath(workspaceRoot, msg.filePath)
-      const pos = new vscode.Position(Math.max(0, msg.startLine), 0)
+
+      let startLine = msg.symbolName
+        ? await this.resolveSymbolStartLine(fileUri, msg.symbolName, msg.symbolKind)
+        : undefined
+      if (typeof startLine !== 'number' && typeof msg.startLine === 'number') {
+        startLine = msg.startLine
+      }
+
+      const pos = new vscode.Position(Math.max(0, startLine ?? 0), 0)
       try {
         await vscode.window.showTextDocument(fileUri, {
           selection: new vscode.Range(pos, pos),
           preserveFocus: false,
         })
-        logger.debug('WorkspaceSymbolService', 'open-file: document shown', { filePath: msg.filePath })
+        logger.debug('WorkspaceSymbolService', 'open-file: document shown', {
+          filePath: msg.filePath,
+          startLine: startLine ?? 0,
+        })
       } catch (e) {
         logger.error('WorkspaceSymbolService', 'open-file: showTextDocument failed', {
           filePath: msg.filePath,

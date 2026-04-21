@@ -15,6 +15,7 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
 
   private elements: DiagElementData[] = []
   private groupedTypes: string[] = []
+  private hasLoadedElements = false
   private postMessageFn: ((msg: unknown) => void) | undefined
 
   constructor(
@@ -36,6 +37,7 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
     logger.debug('ElementLibraryTreeProvider', 'Refresh — clearing element cache')
     this.elements = []
     this.groupedTypes = []
+    this.hasLoadedElements = false
     this._onDidChangeTreeData.fire()
   }
 
@@ -55,7 +57,7 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
     }
 
     if (!element) {
-      if (this.elements.length === 0) {
+      if (!this.hasLoadedElements) {
         logger.debug('ElementLibraryTreeProvider', 'getChildren: loading elements')
         await this.loadElements()
       }
@@ -91,17 +93,19 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
     try {
       logger.debug('ElementLibraryTreeProvider', 'loadElements: fetching via listElements')
       const elements = await this.client.listElements()
+      this.hasLoadedElements = true
       this.setElements(elements)
       logger.debug('ElementLibraryTreeProvider', 'loadElements: done', { count: elements.length })
     } catch (e) {
       logger.error('ElementLibraryTreeProvider', 'loadElements failed', { error: String(e) })
       this.elements = []
       this.groupedTypes = []
+      this.hasLoadedElements = false
     }
   }
 
   setElements(elements: DiagElementData[]): void {
-    logger.info('ElementLibraryTreeProvider', 'setElements', { count: elements.length })
+    logger.debug('ElementLibraryTreeProvider', 'setElements', { count: elements.length })
     this.elements = elements
     const seen = new Set<string>()
     this.groupedTypes = []
