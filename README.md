@@ -1,6 +1,6 @@
 # tlDiagram for VS Code
 
-Browse and edit [tlDiagram](https://tldiagram.com) architecture diagrams without leaving VS Code. The extension opens diagrams in a retained webview panel, exposes your diagram hierarchy and reusable objects in native sidebar views, and lets you link diagram objects to workspace files and symbols from inside the editor.
+Browse and edit [tlDiagram](https://tldiagram.com) architecture diagrams without leaving VS Code. Use the `tld-cli` to easily create a diagram of a directory. Switch between diagrams and code with symbol link support.  
 
 ![alt text](image.png)
 ## Features
@@ -14,7 +14,7 @@ The extension contributes two views in the **tlDiagram** activity bar container:
 | View | What it shows |
 |---|---|
 | **Diagrams** | Diagram hierarchy, including parent/child relationships, with create, rename, delete, open, and open-in-browser actions |
-| **Object Library** | Reusable objects grouped by type, with an **Add to Diagram** action that places the object into the active diagram |
+| **Element Library** | Reusable elements grouped by type, with an **Add to Diagram** action that places the object into the active diagram |
 
 ### Workspace source linking
 Inside the webview, the source picker can browse workspace files and ask VS Code for symbols in the selected file. The selected link is stored in the same shape the web app uses, so links work in both environments.
@@ -47,4 +47,5 @@ All extension activity is written to the **tlDiagram** output channel. The verbo
 
 - VS Code 1.85+
 - A tlDiagram account
+- tld-cli if you want to automatically create diagrams from source. 
 - The extension and webview bundles must be built before loading from source
