@@ -10,5 +10,10 @@ export class ElementTreeItem extends vscode.TreeItem {
     this.tooltip = `${element.name} (${element.type})`
     this.contextValue = 'diagElement'
     this.iconPath = new vscode.ThemeIcon('symbol-class')
+    this.command = {
+      command: 'tldiagram.goToDiagram',
+      title: 'Go to Diagram',
+      arguments: [{ elementId: element.id, elementName: element.name }],
+    }
   }
 }

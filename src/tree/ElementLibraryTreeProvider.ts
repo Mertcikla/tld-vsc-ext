@@ -68,7 +68,7 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
         const label = this.normalizeType(type)
         const item = new vscode.TreeItem(
           label.charAt(0).toUpperCase() + label.slice(1),
-          vscode.TreeItemCollapsibleState.Expanded,
+          vscode.TreeItemCollapsibleState.Collapsed,
         )
         item.contextValue = 'elementTypeGroup'
         item.id = `group::${label}`
