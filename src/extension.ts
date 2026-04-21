@@ -3,6 +3,9 @@ import { logger } from './logger'
 import { AuthManager } from './auth/AuthManager'
 import { AuthUriHandler } from './auth/AuthUriHandler'
 import * as crypto from 'crypto'
+import * as cp from 'child_process'
+import * as util from 'util'
+const execAsync = util.promisify(cp.exec)
 import { ExtensionApiClient } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ElementLibraryTreeProvider } from './tree/ElementLibraryTreeProvider'
@@ -320,6 +323,57 @@ export function activate(context: vscode.ExtensionContext): void {
         logger.error('extension', 'goToDiagram failed', { error: String(e) })
         vscode.window.showErrorMessage(`Failed to go to diagram: ${e instanceof Error ? e.message : String(e)}`)
       }
+    }),
+
+    vscode.commands.registerCommand('tldiagram.analyzeFolder', async (uri?: vscode.Uri) => {
+      logger.info('extension', 'Command: analyzeFolder', { uri: uri?.fsPath })
+      if (!client) {
+        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect / Login" first.')
+        return
+      }
+      
+      const targetPath = uri?.fsPath || vscode.workspace.workspaceFolders?.[0].uri.fsPath
+      if (!targetPath) {
+        vscode.window.showErrorMessage('No folder selected to analyze.')
+        return
+      }
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `tlDiagram: Analyzing workspace...`, cancellable: false },
+        async () => {
+          try {
+            await execAsync(`tld --version`)
+          } catch (err) {
+            vscode.window.showErrorMessage('The "tld" CLI was not found on your PATH. Please install standard tld release to use this feature.')
+            return
+          }
+
+          try {
+            // 1. Run tld init
+            try {
+               await execAsync(`tld init`, { cwd: targetPath })
+            } catch (initErr: any) {
+               if (!initErr.message?.includes('already exists')) {
+                  throw new Error(`Init failed: ${initErr.message}`)
+               }
+            }
+
+            // 2. Run tld analyze
+            await execAsync(`tld analyze .`, { cwd: targetPath })
+
+            // 3. Apply changes automatically
+            await execAsync(`tld apply --force`, { cwd: targetPath })
+
+            vscode.window.showInformationMessage(`Successfully analyzed and synced code models!`)
+            treeProvider.refresh()
+            elementLibraryTreeProvider.refresh()
+            void elementCacheService.refresh()
+          } catch (e: any) {
+             logger.error('extension', 'analyzeFolder failed', { error: String(e) })
+             vscode.window.showErrorMessage(`Process failed: ${e.message}`)
+          }
+        }
+      )
     }),
   )
 

@@ -2,7 +2,7 @@
   "name": "tldiagram",
   "displayName": "tlDiagram",
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
   "icon": "resources/logo-1024.png",
@@ -96,6 +96,11 @@
       {
         "command": "tldiagram.showLogs",
         "title": "tlDiagram: Show Logs"
+      },
+      {
+        "command": "tldiagram.analyzeFolder",
+        "title": "tlDiagram: Analyze Folder",
+        "icon": "$(search)"
       }
     ],
     "menus": {
@@ -110,6 +115,11 @@
         {
           "command": "tldiagram.goToDiagram",
           "when": "tldiagram.authenticated",
+          "group": "navigation"
+        },
+        {
+          "command": "tldiagram.analyzeFolder",
+          "when": "explorerResourceIsFolder",
           "group": "navigation"
         }
       ],
