@@ -23,6 +23,16 @@ export function getWebviewHtml(
   const safeApiKey = JSON.stringify(apiKey)
   const safeDiagramId = JSON.stringify(diagramId)
 
+  const isLocal = serverUrl.startsWith('http://127.') || serverUrl.startsWith('http://localhost')
+  const wsUrl = serverUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
+
+  const connectSrc = isLocal
+    ? `${serverUrl} ${wsUrl}`
+    : `${serverUrl} ${wsUrl}`
+  const imgFontSrc = isLocal
+    ? `${webview.cspSource} https: data: blob:`
+    : `${webview.cspSource} https://tldiagram.com https: data: blob:`
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -32,9 +42,9 @@ export function getWebviewHtml(
     default-src 'none';
     script-src 'nonce-${nonce}';
     style-src ${webview.cspSource} 'unsafe-inline';
-    img-src ${webview.cspSource} https://tldiagram.com https: data: blob:;
-    font-src ${webview.cspSource} https://tldiagram.com data:;
-    connect-src ${serverUrl} ${serverUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')};
+    img-src ${imgFontSrc};
+    font-src ${imgFontSrc};
+    connect-src ${connectSrc};
   ">
   <link rel="stylesheet" href="${styleUri}">
   <title>tlDiagram</title>

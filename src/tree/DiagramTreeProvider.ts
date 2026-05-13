@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
-import type { Diagram, ExtensionApiClient } from '../api/ExtensionApiClient'
+import type { Diagram } from '../api/ExtensionApiClient'
 import { DiagramTreeItem } from './DiagramTreeItem'
+import type { DataSource } from '../datasource/DataSource'
 
 export class DiagramTreeProvider implements vscode.TreeDataProvider<DiagramTreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<DiagramTreeItem | undefined | null>()
@@ -10,9 +11,9 @@ export class DiagramTreeProvider implements vscode.TreeDataProvider<DiagramTreeI
   private loading = false
   private error: string | null = null
 
-  constructor(private client: ExtensionApiClient) {}
+  constructor(private client: DataSource) {}
 
-  updateClient(client: ExtensionApiClient): void {
+  updateClient(client: DataSource): void {
     this.client = client
   }
 

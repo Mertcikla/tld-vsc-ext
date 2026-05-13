@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { logger } from './logger'
-import type { ExtensionApiClient, DiagElementData } from './api/ExtensionApiClient'
+import type { DiagElementData } from './api/ExtensionApiClient'
+import type { DataSource } from './datasource/DataSource'
 import type { GitContextService } from './GitContextService'
 
 export class ElementCacheService {
@@ -8,15 +9,28 @@ export class ElementCacheService {
   readonly onDidChange = this._onDidChange.event
 
   private elements: DiagElementData[] = []
-  private fileIndex: Map<string, DiagElementData[]> = new Map()
+  private _fileIndex: Map<string, DiagElementData[]> = new Map()
 
   constructor(
-    private client: ExtensionApiClient,
+    private client: DataSource,
     private gitService: GitContextService
   ) {}
 
-  updateClient(client: ExtensionApiClient) {
+  get fileIndex(): ReadonlyMap<string, DiagElementData[]> {
+    return this._fileIndex
+  }
+
+  updateClient(client: DataSource) {
     this.client = client
+    // If client supports watch events, re-index on representation updates
+    if (client.mode === 'local') {
+      client.onWatchEvent((event) => {
+        if (event.type === 'representation.updated') {
+          logger.debug('ElementCacheService', 'Watch representation updated — refreshing cache')
+          void this.refresh()
+        }
+      })
+    }
   }
 
   private normalizePath(filePath: string): string {
@@ -28,36 +42,28 @@ export class ElementCacheService {
       logger.debug('ElementCacheService', 'Refreshing cache')
       const allElements = await this.client.listElements()
       this.elements = allElements
-
       const repoInfo = await this.gitService.getRepoInfo()
-      
-      this.fileIndex.clear()
+      this._fileIndex.clear()
 
       for (const el of allElements) {
         if (!el.file_path) continue
-
-        // Check if it's GitHub-linked
         if (el.repo || el.branch) {
           if (!repoInfo) continue
           if (el.repo && el.repo !== repoInfo.repo) continue
           if (el.branch && el.branch !== repoInfo.branch) continue
         }
-
-        // It matches the workspace context (or it's a pure workspace link without repo/branch)
-        // Extract the file path before the anchor
         const anchorIdx = el.file_path.indexOf('#')
         const relPath = this.normalizePath(
           anchorIdx !== -1 ? el.file_path.substring(0, anchorIdx) : el.file_path,
         )
-
-        const existing = this.fileIndex.get(relPath) || []
+        const existing = this._fileIndex.get(relPath) || []
         existing.push(el)
-        this.fileIndex.set(relPath, existing)
+        this._fileIndex.set(relPath, existing)
       }
 
       logger.info('ElementCacheService', 'Refresh complete', {
         totalElements: allElements.length,
-        indexedFiles: this.fileIndex.size
+        indexedFiles: this._fileIndex.size
       })
       this._onDidChange.fire()
     } catch (e) {
@@ -67,14 +73,14 @@ export class ElementCacheService {
 
   getElementsForFile(relPath: string): DiagElementData[] {
     const normalizedPath = this.normalizePath(relPath)
-    const exactMatch = this.fileIndex.get(normalizedPath)
+    const exactMatch = this._fileIndex.get(normalizedPath)
     if (exactMatch) {
       return exactMatch
     }
 
     let bestMatchLength = -1
     const matchedElements: DiagElementData[] = []
-    for (const [indexedPath, elements] of this.fileIndex.entries()) {
+    for (const [indexedPath, elements] of this._fileIndex.entries()) {
       if (normalizedPath === indexedPath || normalizedPath.endsWith(`/${indexedPath}`)) {
         if (indexedPath.length > bestMatchLength) {
           bestMatchLength = indexedPath.length

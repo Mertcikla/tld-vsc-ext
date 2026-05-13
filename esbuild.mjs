@@ -12,7 +12,16 @@ const options = {
   },
   bundle: true,
   outdir: 'out',
-  external: ['vscode', 'cli-table3', 'glob'],
+  external: ['vscode', 'cli-table3', 'glob', '@bufbuild/protobuf/codegenv2', '@bufbuild/protobuf/wkt'],
+  // @bufbuild/protobuf internal sub-paths are used by generated proto but may not be in exports map
+  plugins: [{
+    name: 'bufbuild-resolve',
+    setup(build) {
+      build.onResolve({ filter: /^@bufbuild\/protobuf\/(codegenv2|wkt)$/ }, (args) => {
+        return { external: true }
+      })
+    },
+  }],
   format: 'cjs',
   platform: 'node',
   target: 'node18',

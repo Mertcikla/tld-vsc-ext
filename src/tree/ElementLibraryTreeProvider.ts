@@ -1,8 +1,8 @@
 import * as vscode from 'vscode'
 import { logger } from '../logger'
-import type { ExtensionApiClient } from '../api/ExtensionApiClient'
 import { ElementTreeItem, type DiagElementData } from './ElementTreeItem'
 import type { WebviewManager } from '../webview/WebviewManager'
+import type { DataSource } from '../datasource/DataSource'
 
 /**
  * TreeDataProvider for the Element Library panel.
@@ -19,11 +19,11 @@ export class ElementLibraryTreeProvider implements vscode.TreeDataProvider<Eleme
   private postMessageFn: ((msg: unknown) => void) | undefined
 
   constructor(
-    private client: ExtensionApiClient | undefined,
+    private client: DataSource | undefined,
     private readonly webviewManager: WebviewManager,
   ) {}
 
-  updateClient(client: ExtensionApiClient): void {
+  updateClient(client: DataSource): void {
     logger.debug('ElementLibraryTreeProvider', 'Client updated')
     this.client = client
   }

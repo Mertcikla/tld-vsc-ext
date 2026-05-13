@@ -43,7 +43,7 @@ export class TLDiagramCodeLensProvider implements vscode.CodeLensProvider {
           const matchedElements = this.cacheService.getElementsForSymbol(relPath, s.name)
           for (const el of matchedElements) {
             const command: vscode.Command = {
-              title: `tlDiagram: [${el.name}]`,
+              title: `tlDiagram: ${el.name} (${el.type})`,
               command: 'tldiagram.goToDiagram',
               arguments: [{ elementId: el.id, elementName: el.name }]
             }

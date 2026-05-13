@@ -43,6 +43,11 @@
         {
           "id": "tldiagram.elementLibrary",
           "name": "Element Library"
+        },
+        {
+          "id": "tldiagram.watchDiff",
+          "name": "Watch Changes",
+          "when": "tldiagram.mode == local"
         }
       ]
     },
@@ -101,6 +106,52 @@
         "command": "tldiagram.analyzeFolder",
         "title": "tlDiagram: Analyze Folder",
         "icon": "$(search)"
+      },
+      {
+        "command": "tldiagram.switchMode",
+        "title": "tlDiagram: Switch Mode (Local/Cloud)"
+      },
+      {
+        "command": "tldiagram.startWatch",
+        "title": "tlDiagram: Start Watching",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "tldiagram.stopWatch",
+        "title": "tlDiagram: Stop Watching",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "tldiagram.showWatchDiff",
+        "title": "tlDiagram: Show Watch Changes",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "tldiagram.watchQuickActions",
+        "title": "tlDiagram: Watch Quick Actions"
+      },
+      {
+        "command": "tldiagram.exportToCloud",
+        "title": "tlDiagram: Upload Workspace to Cloud",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "tldiagram.importFromCloud",
+        "title": "tlDiagram: Download from Cloud",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "tldiagram.showSyncStatus",
+        "title": "tlDiagram: Show Sync Status"
+      },
+      {
+        "command": "tldiagram.diffWithCloud",
+        "title": "tlDiagram: Compare with Cloud",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "tldiagram.updateCli",
+        "title": "tlDiagram: Update CLI"
       }
     ],
     "menus": {
@@ -166,10 +217,45 @@
     "configuration": {
       "title": "tlDiagram",
       "properties": {
+        "tldiagram.mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "local",
+            "cloud"
+          ],
+          "enumDescriptions": [
+            "Prefer local CLI if found, fall back to cloud",
+            "Always use local mode (requires tld CLI)",
+            "Always use cloud mode (requires login)"
+          ],
+          "description": "Connection mode for the tlDiagram extension"
+        },
+        "tldiagram.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the tld binary (empty = auto-detect on PATH)"
+        },
+        "tldiagram.autoStartWatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start tld watch when opening a workspace with .tld/ directory"
+        },
         "tldiagram.serverUrl": {
           "type": "string",
           "default": "https://tldiagram.com",
           "description": "Base URL of your tlDiagram server (change only for self-hosted instances)"
+        },
+        "tldiagram.watch.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host for the local watch/serve server"
+        },
+        "tldiagram.watch.port": {
+          "type": "integer",
+          "default": 0,
+          "description": "Port for the local watch/serve server (0 = auto-select free port)"
         },
         "tldiagram.logLevel": {
           "type": "string",

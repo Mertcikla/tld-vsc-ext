@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import { logger } from '../logger'
 import type { AuthManager } from '../auth/AuthManager'
 import type { DiagramTreeItem } from '../tree/DiagramTreeItem'
+import type { DataSource } from '../datasource/DataSource'
 import { getWebviewHtml } from './getWebviewHtml'
 import { MessageRouter } from './MessageRouter'
 import { WorkspaceSymbolService } from './WorkspaceSymbolService'
@@ -12,13 +13,18 @@ export class WebviewManager {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly authManager: AuthManager,
-    private readonly serverUrl: string,
+    private serverUrl: string,
   ) {}
+
+  setDataSource(dataSource: DataSource): void {
+    if (dataSource.mode === 'local') {
+      this.serverUrl = (dataSource as any).baseUrl || 'http://127.0.0.1:8060'
+    }
+  }
 
   async openDiagram(item: DiagramTreeItem): Promise<void> {
     const { diagram } = item
 
-    // Reuse existing panel if open
     const existing = this.panels.get(diagram.id)
     if (existing) {
       logger.debug('WebviewManager', 'Revealing existing panel', { diagramId: diagram.id })
@@ -29,7 +35,9 @@ export class WebviewManager {
     logger.info('WebviewManager', 'Opening diagram panel', { diagramId: diagram.id, name: diagram.name })
 
     const apiKey = await this.authManager.getKey()
-    if (!apiKey) {
+    const isLocalUrl = this.serverUrl.startsWith('http://127.') || this.serverUrl.startsWith('http://localhost')
+
+    if (!isLocalUrl && !apiKey) {
       logger.error('WebviewManager', 'Cannot open panel — no API key stored')
       vscode.window.showErrorMessage(
         'Not connected to tlDiagram. Run "tlDiagram: Connect with API Key" first.',
@@ -51,24 +59,21 @@ export class WebviewManager {
     panel.webview.html = getWebviewHtml(
       panel.webview,
       this.extensionUri,
-      apiKey,
+      apiKey || '',
       this.serverUrl,
       diagram.id,
     )
 
     logger.debug('WebviewManager', 'Webview HTML injected', { diagramId: diagram.id })
 
-    // Set up typed message routing
     const router = new MessageRouter()
     const postMessage = (msg: unknown) => {
       logger.trace('WebviewManager', 'postMessage → webview', { type: (msg as { type?: string }).type })
       panel.webview.postMessage(msg)
     }
 
-    // Wire workspace symbol/file handlers
     new WorkspaceSymbolService(postMessage, router)
 
-    // Handle diagram-loaded
     router.register('diagram-loaded', (msg) => {
       if (msg.type !== 'diagram-loaded') return
       logger.info('WebviewManager', 'diagram-loaded received', {
