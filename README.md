@@ -1,6 +1,6 @@
 # tlDiagram for VS Code
 
-Browse and edit [tlDiagram](https://tldiagram.com) architecture diagrams without leaving VS Code. Use the `tld-cli` to easily create a diagram of a directory. Switch between diagrams and code with symbol link support.  
+Browse and edit tlDiagram architecture diagrams without leaving VS Code. The extension is backed by the local `tld` CLI and uses the open-source core UI from `tld/frontend`.
 
 ![alt text](image.png)
 ## Features
@@ -21,8 +21,8 @@ Inside the webview, the source picker can browse workspace files and ask VS Code
 
 Clicking **Open in Editor** jumps to the linked file and line.
 
-### Authentication
-Use the login flow to connect your tlDiagram account. Credentials are stored securely in VS Code SecretStorage and reused on startup when present.
+### Local CLI mode
+The extension starts `tld watch` for the current workspace and talks to the local CLI HTTP API. Set `tlDiagram › Cli Path` if `tld` is not on `PATH`.
 
 ### Logging
 All extension activity is written to the **tlDiagram** output channel. The verbosity is controlled by `tldiagram.logLevel`.
@@ -31,12 +31,10 @@ All extension activity is written to the **tlDiagram** output channel. The verbo
 
 | Command | Where it appears | Description |
 |---|---|---|
-| `tlDiagram: Connect / Login` | Command palette | Start the browser-based tlDiagram login flow |
-| `tlDiagram: Disconnect` | Command palette | Clear stored credentials |
 | `tlDiagram: Refresh Diagrams` | Command palette, tree toolbar | Re-fetch diagrams and refresh the object library |
 | `tlDiagram: New Diagram` | Command palette, tree toolbar | Create a blank diagram |
 | `Open Diagram` | Diagram item context menu | Open the selected diagram in the webview panel |
-| `Open in Browser` | Diagram item context menu | Open the selected diagram on tldiagram.com |
+| `Open in Browser` | Diagram item context menu | Open the selected diagram on the local tld server |
 | `Rename Diagram` | Diagram item context menu | Rename the selected diagram |
 | `Delete Diagram` | Diagram item context menu | Delete the selected diagram |
 | `Add to Diagram` | Object Library item context menu | Place the selected object into the active diagram |
@@ -46,6 +44,5 @@ All extension activity is written to the **tlDiagram** output channel. The verbo
 ## Requirements
 
 - VS Code 1.85+
-- A tlDiagram account
-- tld-cli if you want to automatically create diagrams from source. 
+- The `tld` CLI
 - The extension and webview bundles must be built before loading from source

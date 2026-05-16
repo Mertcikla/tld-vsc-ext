@@ -1,6 +1,5 @@
 import * as vscode from 'vscode'
 import { logger } from '../logger'
-import type { AuthManager } from '../auth/AuthManager'
 import type { DiagramTreeItem } from '../tree/DiagramTreeItem'
 import type { DataSource } from '../datasource/DataSource'
 import { getWebviewHtml } from './getWebviewHtml'
@@ -12,16 +11,11 @@ export class WebviewManager {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly authManager: AuthManager,
-    private serverUrl: string,
+    private serverUrl: string = 'http://127.0.0.1:8060',
   ) {}
 
   setDataSource(dataSource: DataSource): void {
-    if (dataSource.mode === 'local') {
-      this.serverUrl = (dataSource as any).baseUrl || 'http://127.0.0.1:8060'
-    } else {
-      this.serverUrl = (dataSource as any).serverUrl || this.serverUrl
-    }
+    this.serverUrl = (dataSource as any).baseUrl || this.serverUrl
   }
 
   async openDiagram(item: DiagramTreeItem): Promise<void> {
@@ -35,17 +29,6 @@ export class WebviewManager {
     }
 
     logger.info('WebviewManager', 'Opening diagram panel', { diagramId: diagram.id, name: diagram.name })
-
-    const apiKey = await this.authManager.getKey()
-    const isLocalUrl = this.serverUrl.startsWith('http://127.') || this.serverUrl.startsWith('http://localhost')
-
-    if (!isLocalUrl && !apiKey) {
-      logger.error('WebviewManager', 'Cannot open panel — no API key stored')
-      vscode.window.showErrorMessage(
-        'Not connected to tlDiagram. Run "tlDiagram: Connect with API Key" first.',
-      )
-      return
-    }
 
     const panel = vscode.window.createWebviewPanel(
       'tldiagram.diagram',
@@ -61,7 +44,6 @@ export class WebviewManager {
     panel.webview.html = getWebviewHtml(
       panel.webview,
       this.extensionUri,
-      apiKey || '',
       this.serverUrl,
       diagram.id,
     )

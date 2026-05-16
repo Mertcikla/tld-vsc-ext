@@ -3,7 +3,7 @@ import * as http from 'http'
 import * as vscode from 'vscode'
 import { logger } from '../logger'
 import { ExtensionApiClient, type Diagram, type DiagElementData } from '../api/ExtensionApiClient'
-import type { DataSource, WatchEvent, WatchStatus, DiffResult, SyncStatus } from './DataSource'
+import type { DataSource, WatchEvent, WatchStatus } from './DataSource'
 import { WatchService } from '../watch/WatchService'
 
 const LOCAL_WORKSPACE_ID = '11111111-1111-1111-1111-111111111111'
@@ -116,7 +116,7 @@ export class LocalDataSource implements DataSource {
     }
 
     this.port = port
-    this.client = new ExtensionApiClient(baseUrl, '')
+    this.client = new ExtensionApiClient(baseUrl)
     this.watchService = new WatchService(baseUrl, this.workspaceRoot)
     await this.watchService.start()
     logger.info('LocalDataSource', 'Connected', { baseUrl })
@@ -257,19 +257,4 @@ export class LocalDataSource implements DataSource {
     return new vscode.Disposable(() => {})
   }
 
-  exportToCloud(): Promise<void> {
-    throw new Error('Not connected to cloud. Connect to cloud first for hybrid mode.')
-  }
-
-  importFromCloud(): Promise<void> {
-    throw new Error('Not connected to cloud. Connect to cloud first for hybrid mode.')
-  }
-
-  diffWithCloud(): Promise<DiffResult> {
-    return Promise.resolve({ changed: false, scan: {}, representation: {}, diffs: [] })
-  }
-
-  getSyncStatus(): Promise<SyncStatus> {
-    return Promise.resolve({ localChanges: 0, needsPush: false, needsPull: false })
-  }
 }

@@ -1,10 +1,7 @@
 import * as vscode from 'vscode'
 import { logger } from './logger'
-import { AuthManager } from './auth/AuthManager'
-import { AuthUriHandler } from './auth/AuthUriHandler'
 import * as cp from 'child_process'
 import * as util from 'util'
-const execAsync = util.promisify(cp.exec)
 const execFileAsync = util.promisify(cp.execFile)
 import { type DiagElementData } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
@@ -21,17 +18,26 @@ import { WatchService } from './watch/WatchService'
 import { WatchDiffProvider } from './watch/WatchDiffProvider'
 import { WatchStatusBar } from './watch/WatchStatusBar'
 import { WorkspaceSymbolProvider } from './provider/WorkspaceSymbolProvider'
-import { SyncService } from './sync/SyncService'
-import { SyncStatusBar } from './sync/SyncStatusBar'
-import { DiffDocument } from './sync/DiffDocument'
 import { CLIManager } from './cli/CLIManager'
 
-function getServerUrl(): string {
-  return vscode.workspace
-    .getConfiguration('tldiagram')
-    .get<string>('serverUrl', 'https://tldiagram.com')
-    .replace(/\/$/, '')
+const INSTALL_COMMAND_UNIX = 'curl -LsSf https://tldiagram.com/install.sh | sh'
+const INSTALL_COMMAND_WINDOWS = 'powershell -ExecutionPolicy ByPass -c "irm https://tldiagram.com/install.ps1 | iex"'
+
+type PaletteChoice = {
+  label: string
+  description: string
+  accent: string
+  canvas: string
+  element: string
 }
+
+const TLD_PALETTES: PaletteChoice[] = [
+  {
+    label: '$(symbol-color) Blue', description: 'Blue accent with dark canvas', accent: '#63b3ed', canvas: '#10151f', element: '#1f2937'
+  },
+  { label: '$(symbol-color) Forest', description: 'Green accent with deep neutral canvas', accent: '#34d399', canvas: '#101816', element: '#1f2a24' },
+  { label: '$(symbol-color) Ember', description: 'Warm accent with charcoal canvas', accent: '#f97316', canvas: '#181412', element: '#2a211c' },
+]
 
 function logCommandOutput(command: string, stream: 'stdout' | 'stderr', output: string): void {
   const lines = output
@@ -45,23 +51,6 @@ function logCommandOutput(command: string, stream: 'stdout' | 'stderr', output: 
     } else {
       logger.info('extension', `${command} ${stream}`, { line })
     }
-  }
-}
-
-async function execLogged(command: string, options?: cp.ExecOptions): Promise<{ stdout: string; stderr: string }> {
-  logger.info('extension', 'Running command', { command, cwd: options?.cwd })
-  try {
-    const result = await execAsync(command, options)
-    const stdout = String(result.stdout)
-    const stderr = String(result.stderr)
-    logCommandOutput(command, 'stdout', stdout)
-    logCommandOutput(command, 'stderr', stderr)
-    return { stdout, stderr }
-  } catch (error) {
-    const execError = error as cp.ExecException & { stdout?: string; stderr?: string }
-    logCommandOutput(command, 'stdout', execError.stdout ?? '')
-    logCommandOutput(command, 'stderr', execError.stderr ?? '')
-    throw error
   }
 }
 
@@ -85,30 +74,17 @@ async function execFileLogged(file: string, args: string[], options?: cp.ExecFil
 
 export function activate(context: vscode.ExtensionContext): void {
   logger.init(context)
-  const serverUrl = getServerUrl()
-  logger.info('extension', 'Activating', { serverUrl })
+  logger.info('extension', 'Activating local CLI mode')
 
-  const authManager = new AuthManager(context.secrets, serverUrl)
-  const authUriHandler = new AuthUriHandler()
-  context.subscriptions.push(vscode.window.registerUriHandler(authUriHandler))
-
-  const modeManager = new ModeManager(authManager)
+  const modeManager = new ModeManager()
   const cliManager = new CLIManager()
   context.subscriptions.push(new vscode.Disposable(() => { void modeManager.dispose() }))
   modeManager.refreshFeatureContexts()
-  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
-    if (event.affectsConfiguration('tldiagram.cloud.enabled')) {
-      modeManager.refreshFeatureContexts()
-      if (!modeManager.isCloudEnabled()) {
-        disposeSync()
-      }
-    }
-  }))
 
   let dataSource: DataSource | undefined
 
   const treeProvider = new DiagramTreeProvider(undefined as unknown as DataSource)
-  const webviewManager = new WebviewManager(context.extensionUri, authManager, serverUrl)
+  const webviewManager = new WebviewManager(context.extensionUri)
   const gitService = new GitContextService()
   const elementCacheService = new ElementCacheService(undefined as unknown as DataSource, gitService)
 
@@ -242,6 +218,15 @@ export function activate(context: vscode.ExtensionContext): void {
   })
   context.subscriptions.push(treeView, elementLibraryView)
 
+  const refreshCliInstalledContext = async (): Promise<boolean> => {
+    const tldPath = await cliManager.detect()
+    const installed = !!tldPath
+    void vscode.commands.executeCommand('setContext', 'tldiagram.cliInstalled', installed)
+    return installed
+  }
+
+  void refreshCliInstalledContext()
+
   const updateAllProviders = (ds: DataSource): void => {
     treeProvider.updateClient(ds)
     elementLibraryTreeProvider.updateClient(ds)
@@ -284,42 +269,6 @@ export function activate(context: vscode.ExtensionContext): void {
     watchService = undefined
   }
 
-  // Sync services
-  let syncService: SyncService | undefined
-  let syncStatusBar: SyncStatusBar | undefined
-  let diffDocument: DiffDocument | undefined
-
-  const initSync = (): void => {
-    if (!modeManager.isCloudEnabled()) return
-    disposeSync()
-
-    syncService = new SyncService((status) => {
-      syncStatusBar?.updateStatus(status)
-    })
-    syncStatusBar = new SyncStatusBar(syncService)
-
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (workspaceRoot) {
-      syncService.startFileWatcher(workspaceRoot)
-      void syncService.getSyncStatus(workspaceRoot).then((status) => {
-        syncStatusBar?.updateStatus(status)
-      })
-    }
-
-    diffDocument = new DiffDocument(syncService)
-    context.subscriptions.push(
-      vscode.workspace.registerTextDocumentContentProvider('tldiagram-diff', diffDocument),
-    )
-  }
-
-  const disposeSync = (): void => {
-    syncStatusBar?.dispose()
-    syncStatusBar = undefined
-    syncService?.dispose()
-    syncService = undefined
-    diffDocument = undefined
-  }
-
   // Bootstrap: initialize mode
   void modeManager.initialize().then((ds) => {
     if (ds) {
@@ -342,73 +291,18 @@ export function activate(context: vscode.ExtensionContext): void {
     disposeWatch()
     updateAllProviders(ds)
     initWatch(ds)
-    if (modeManager.isCloudEnabled()) initSync()
     treeProvider.refresh()
     elementLibraryTreeProvider.refresh()
     void elementCacheService.refresh()
   }
 
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+    if (event.affectsConfiguration('tldiagram.cliPath')) {
+      void refreshCliInstalledContext()
+    }
+  }))
+
   context.subscriptions.push(
-    vscode.commands.registerCommand('tldiagram.login', async () => {
-      if (!modeManager.isCloudEnabled()) {
-        vscode.window.showInformationMessage('tlDiagram cloud features are disabled. Enable "tlDiagram › Cloud: Enabled" to use login.')
-        return
-      }
-      logger.info('extension', 'Command: login')
-      try {
-        let authDisposable: vscode.Disposable | undefined
-        const timeout = 120_000
-
-        const tokenPromise = new Promise<string>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            authDisposable?.dispose()
-            reject(new Error('Login timed out after 2 minutes'))
-          }, timeout)
-
-          authDisposable = authUriHandler.onDidAuthenticate(({ token, state }) => {
-            clearTimeout(timer)
-            authDisposable?.dispose()
-            resolve(token)
-          })
-        })
-
-        const loginUrl = `${serverUrl}/auth/vscode?redirect=${encodeURIComponent('vscode://tldiagram-com.tldiagram/auth')}`
-        await vscode.env.openExternal(vscode.Uri.parse(loginUrl))
-        vscode.window.showInformationMessage('Complete login in your browser to connect tlDiagram.')
-
-        const token = await tokenPromise
-        await authManager.storeKey(token)
-        logger.info('extension', 'Login successful — switching to cloud mode')
-
-        const ds = await modeManager.switchToCloud()
-        dataSource = ds
-        onModeChange(ds)
-      } catch (e) {
-        logger.error('extension', 'Cloud switch after login failed', { error: String(e) })
-      }
-    }),
-
-    vscode.commands.registerCommand('tldiagram.logout', async () => {
-      if (!modeManager.isCloudEnabled()) {
-        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
-        return
-      }
-      logger.info('extension', 'Command: logout')
-      await authManager.clearKey()
-      dataSource = undefined
-      void vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', false)
-
-      // Try falling back to local mode
-      try {
-        const ds = await modeManager.switchToLocal()
-        dataSource = ds
-        onModeChange(ds)
-      } catch {
-        treeProvider.clear()
-        logger.info('extension', 'Logged out — no local fallback available')
-      }
-    }),
-
     vscode.commands.registerCommand('tldiagram.refresh', () => {
       logger.info('extension', 'Command: refresh')
       treeProvider.refresh()
@@ -423,7 +317,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.createDiagram', async () => {
       logger.info('extension', 'Command: createDiagram')
       if (!dataSource) {
-        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect / Login" first.')
+        vscode.window.showErrorMessage('Not connected. Verify the tld CLI and reconnect local mode.')
         return
       }
       const name = await vscode.window.showInputBox({
@@ -493,7 +387,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.openInBrowser', (item: DiagramTreeItem) => {
-      const url = `${serverUrl}/app/views/${item.diagram.id}`
+      const baseUrl = dataSource?.mode === 'local' ? (dataSource as any).baseUrl : undefined
+      if (!baseUrl) {
+        vscode.window.showErrorMessage('Not connected to a local tld workspace.')
+        return
+      }
+      const url = `${baseUrl}/views/${item.diagram.id}`
       logger.info('extension', 'Command: openInBrowser', { id: item.diagram.id, url })
       void vscode.env.openExternal(vscode.Uri.parse(url))
     }),
@@ -509,12 +408,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand('tldiagram.switchMode', async () => {
       logger.info('extension', 'Command: switchMode')
-      const modes: Array<{ label: string; description: string; mode: 'cloud' | 'local' }> = [
+      const modes: Array<{ label: string; description: string; mode: 'local' }> = [
         { label: '$(device-desktop) Local Mode', description: 'Use local tld CLI', mode: 'local' as const },
       ]
-      if (modeManager.isCloudEnabled()) {
-        modes.unshift({ label: '$(server) Cloud Mode', description: 'Connect to tlDiagram.com API', mode: 'cloud' as const })
-      }
       const selected = await vscode.window.showQuickPick(modes, {
         placeHolder: `Current: ${dataSource?.mode ?? 'none'}`,
       })
@@ -522,11 +418,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       try {
         let ds: DataSource | undefined
-        if (selected.mode === 'cloud') {
-          ds = await modeManager.switchToCloud()
-        } else {
-          ds = await modeManager.switchToLocal()
-        }
+        ds = await modeManager.switchToLocal()
         if (ds) {
           dataSource = ds
           onModeChange(ds)
@@ -635,88 +527,100 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    vscode.commands.registerCommand('tldiagram.exportToCloud', async () => {
-      if (!modeManager.isCloudEnabled()) {
-        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
-        return
-      }
-      logger.info('extension', 'Command: exportToCloud')
-      if (!syncService) {
-        vscode.window.showErrorMessage('Sync is not available. Connect to cloud first.')
-        return
-      }
-      try {
-        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
-        await syncService.exportToCloud(root)
-      } catch (e) {
-        logger.error('extension', 'exportToCloud failed', { error: String(e) })
-        vscode.window.showErrorMessage(`Export failed: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    }),
+    vscode.commands.registerCommand('tldiagram.installCli', async () => {
+      logger.info('extension', 'Command: installCli')
+      const command = process.platform === 'win32' ? INSTALL_COMMAND_WINDOWS : INSTALL_COMMAND_UNIX
+      const sourceUrl = 'https://github.com/Mertcikla/tld'
+      const install = await vscode.window.showWarningMessage(
+        `This will run the official open-source tld CLI installer in a VS Code terminal. Source: ${sourceUrl}`,
+        { modal: true },
+        'Install CLI',
+      )
+      if (install !== 'Install CLI') return
 
-    vscode.commands.registerCommand('tldiagram.importFromCloud', async () => {
-      if (!modeManager.isCloudEnabled()) {
-        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
-        return
-      }
-      logger.info('extension', 'Command: importFromCloud')
-      if (!syncService) {
-        vscode.window.showErrorMessage('Sync is not available. Connect to cloud first.')
-        return
-      }
-      try {
-        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
-        await syncService.importFromCloud(root)
-        treeProvider.refresh()
-        elementLibraryTreeProvider.refresh()
-        void elementCacheService.refresh()
-      } catch (e) {
-        logger.error('extension', 'importFromCloud failed', { error: String(e) })
-        vscode.window.showErrorMessage(`Import failed: ${e instanceof Error ? e.message : String(e)}`)
-      }
-    }),
-
-    vscode.commands.registerCommand('tldiagram.showSyncStatus', async () => {
-      if (!modeManager.isCloudEnabled()) {
-        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
-        return
-      }
-      logger.info('extension', 'Command: showSyncStatus')
-      if (!syncService) return
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
-      const status = await syncService.getSyncStatus(root)
-      const msg = status.localChanges > 0
-        ? `tlDiagram: ${status.localChanges} local change${status.localChanges === 1 ? '' : 's'} pending${status.needsPush ? ' — needs push' : ''}`
-        : 'tlDiagram: In sync with cloud'
-      vscode.window.showInformationMessage(msg)
-    }),
-
-    vscode.commands.registerCommand('tldiagram.diffWithCloud', async () => {
-      if (!modeManager.isCloudEnabled()) {
-        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
-        return
-      }
-      logger.info('extension', 'Command: diffWithCloud')
-      if (!diffDocument) return
-      diffDocument.refresh()
-      const uri = vscode.Uri.parse('tldiagram-diff://cloud')
-      await vscode.window.showTextDocument(uri, { preview: true })
+      const terminal = vscode.window.createTerminal('tlDiagram CLI Install')
+      terminal.show()
+      terminal.sendText(command, true)
     }),
 
     vscode.commands.registerCommand('tldiagram.updateCli', async () => {
+      await vscode.commands.executeCommand('tldiagram.installCli')
+    }),
+
+    vscode.commands.registerCommand('tldiagram.verifyCli', async () => {
+      logger.info('extension', 'Command: verifyCli')
       const tldPath = await cliManager.detect()
       if (!tldPath) {
-        vscode.window.showInformationMessage('Automatic tld CLI download is disabled. Set "tlDiagram › Cli Path" or install tld on PATH.')
+        void vscode.commands.executeCommand('setContext', 'tldiagram.cliInstalled', false)
+        vscode.window.showErrorMessage('The "tld" CLI was not found. Set "tlDiagram › Cli Path" or install tld on PATH.')
         return
       }
       const version = await cliManager.getVersion()
+      void vscode.commands.executeCommand('setContext', 'tldiagram.cliInstalled', true)
       vscode.window.showInformationMessage(`tlDiagram CLI: ${version ?? tldPath}`)
+    }),
+
+    vscode.commands.registerCommand('tldiagram.openDocs', async () => {
+      logger.info('extension', 'Command: openDocs')
+      await vscode.env.openExternal(vscode.Uri.parse('https://tldiagram.com/docs'))
+    }),
+
+    vscode.commands.registerCommand('tldiagram.focusDiagramsView', async () => {
+      logger.info('extension', 'Command: focusDiagramsView')
+      await vscode.commands.executeCommand('tldiagram.diagramTree.focus')
+    }),
+
+    vscode.commands.registerCommand('tldiagram.focusElementLibraryView', async () => {
+      logger.info('extension', 'Command: focusElementLibraryView')
+      await vscode.commands.executeCommand('tldiagram.elementLibrary.focus')
+    }),
+
+    vscode.commands.registerCommand('tldiagram.configureColors', async () => {
+      logger.info('extension', 'Command: configureColors')
+      const config = vscode.workspace.getConfiguration('tldiagram')
+      const options = [
+        {
+          label: '$(color-mode) Import VS Code Theme Colors',
+          description: 'Default',
+          action: 'vscodeTheme' as const,
+        },
+        ...TLD_PALETTES.map((palette) => ({
+          ...palette,
+          action: 'palette' as const,
+        })),
+        {
+          label: '$(settings-gear) Customize Palette Settings',
+          description: 'Open tlDiagram color settings',
+          action: 'settings' as const,
+        },
+      ]
+      const selected = await vscode.window.showQuickPick(options, {
+        placeHolder: 'Choose tlDiagram UI colors',
+      })
+      if (!selected) return
+
+      if (selected.action === 'settings') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:tlDiagram-com.tldiagram colors')
+        return
+      }
+
+      if (selected.action === 'vscodeTheme') {
+        await config.update('uiColorMode', 'vscodeTheme', vscode.ConfigurationTarget.Global)
+        vscode.window.showInformationMessage('tlDiagram will import VS Code theme colors in new diagram panels.')
+        return
+      }
+
+      await config.update('uiColorMode', 'palette', vscode.ConfigurationTarget.Global)
+      await config.update('paletteAccent', selected.accent, vscode.ConfigurationTarget.Global)
+      await config.update('paletteCanvas', selected.canvas, vscode.ConfigurationTarget.Global)
+      await config.update('paletteElement', selected.element, vscode.ConfigurationTarget.Global)
+      vscode.window.showInformationMessage('tlDiagram palette colors will apply to new diagram panels.')
     }),
 
     vscode.commands.registerCommand('tldiagram.goToDiagram', async (args?: { elementId?: number; elementName?: string } | vscode.Uri) => {
       logger.info('extension', 'Command: goToDiagram', args)
       if (!dataSource) {
-        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect with API Key" first.')
+        vscode.window.showErrorMessage('Not connected. Verify the tld CLI and reconnect local mode.')
         return
       }
       try {
@@ -761,7 +665,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.analyzeFolder', async (uri?: vscode.Uri) => {
       logger.info('extension', 'Command: analyzeFolder', { uri: uri?.fsPath })
       if (!dataSource) {
-        vscode.window.showErrorMessage('Not connected. Run "tlDiagram: Connect / Login" first.')
+        vscode.window.showErrorMessage('Not connected. Verify the tld CLI and reconnect local mode.')
         return
       }
 
@@ -796,12 +700,7 @@ export function activate(context: vscode.ExtensionContext): void {
               }
             }
             await execFileLogged(tldPath, ['analyze', '.'], { cwd: targetPath })
-            if (modeManager.isCloudEnabled()) {
-              await execFileLogged(tldPath, ['apply', '--force'], { cwd: targetPath })
-            }
-            vscode.window.showInformationMessage(modeManager.isCloudEnabled()
-              ? 'Successfully analyzed and synced code models!'
-              : 'Successfully analyzed code models locally!')
+            vscode.window.showInformationMessage('Successfully analyzed code models locally!')
             treeProvider.refresh()
             elementLibraryTreeProvider.refresh()
             void elementCacheService.refresh()

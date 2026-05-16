@@ -20,8 +20,7 @@
     "flow chart"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onUri"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -52,16 +51,6 @@
       ]
     },
     "commands": [
-      {
-        "command": "tldiagram.login",
-        "title": "tlDiagram: Connect / Login",
-        "enablement": "tldiagram.cloudEnabled"
-      },
-      {
-        "command": "tldiagram.logout",
-        "title": "tlDiagram: Disconnect",
-        "enablement": "tldiagram.cloudEnabled"
-      },
       {
         "command": "tldiagram.refresh",
         "title": "tlDiagram: Refresh Diagrams",
@@ -111,7 +100,7 @@
       },
       {
         "command": "tldiagram.switchMode",
-        "title": "tlDiagram: Switch Mode (Local/Cloud)"
+        "title": "tlDiagram: Reconnect Local CLI"
       },
       {
         "command": "tldiagram.startWatch",
@@ -133,58 +122,43 @@
         "title": "tlDiagram: Watch Quick Actions"
       },
       {
-        "command": "tldiagram.exportToCloud",
-        "title": "tlDiagram: Upload Workspace to Cloud",
-        "icon": "$(cloud-upload)",
-        "enablement": "tldiagram.cloudEnabled"
-      },
-      {
-        "command": "tldiagram.importFromCloud",
-        "title": "tlDiagram: Download from Cloud",
-        "icon": "$(cloud-download)",
-        "enablement": "tldiagram.cloudEnabled"
-      },
-      {
-        "command": "tldiagram.showSyncStatus",
-        "title": "tlDiagram: Show Sync Status",
-        "enablement": "tldiagram.cloudEnabled"
-      },
-      {
-        "command": "tldiagram.diffWithCloud",
-        "title": "tlDiagram: Compare with Cloud",
-        "icon": "$(git-compare)",
-        "enablement": "tldiagram.cloudEnabled"
-      },
-      {
         "command": "tldiagram.updateCli",
-        "title": "tlDiagram: Update CLI"
+        "title": "tlDiagram: Install or Update CLI"
+      },
+      {
+        "command": "tldiagram.installCli",
+        "title": "tlDiagram: Install CLI"
+      },
+      {
+        "command": "tldiagram.verifyCli",
+        "title": "tlDiagram: Verify CLI"
+      },
+      {
+        "command": "tldiagram.openDocs",
+        "title": "tlDiagram: Open Documentation"
+      },
+      {
+        "command": "tldiagram.focusDiagramsView",
+        "title": "tlDiagram: Show Diagrams View"
+      },
+      {
+        "command": "tldiagram.focusElementLibraryView",
+        "title": "tlDiagram: Show Element Library"
+      },
+      {
+        "command": "tldiagram.configureColors",
+        "title": "tlDiagram: Configure UI Colors"
       }
     ],
     "menus": {
       "commandPalette": [
         {
-          "command": "tldiagram.login",
-          "when": "tldiagram.cloudEnabled"
+          "command": "tldiagram.focusDiagramsView",
+          "when": "false"
         },
         {
-          "command": "tldiagram.logout",
-          "when": "tldiagram.cloudEnabled"
-        },
-        {
-          "command": "tldiagram.exportToCloud",
-          "when": "tldiagram.cloudEnabled"
-        },
-        {
-          "command": "tldiagram.importFromCloud",
-          "when": "tldiagram.cloudEnabled"
-        },
-        {
-          "command": "tldiagram.showSyncStatus",
-          "when": "tldiagram.cloudEnabled"
-        },
-        {
-          "command": "tldiagram.diffWithCloud",
-          "when": "tldiagram.cloudEnabled"
+          "command": "tldiagram.focusElementLibraryView",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -251,18 +225,14 @@
       "properties": {
         "tldiagram.mode": {
           "type": "string",
-          "default": "auto",
+          "default": "local",
           "enum": [
-            "auto",
-            "local",
-            "cloud"
+            "local"
           ],
           "enumDescriptions": [
-            "Prefer local CLI if found, fall back to cloud",
-            "Always use local mode (requires tld CLI)",
-            "Always use cloud mode (requires login)"
+            "Use local mode through the tld CLI"
           ],
-          "description": "Connection mode for the tlDiagram extension"
+          "description": "Connection mode for the tlDiagram extension. The VS Code extension uses the local tld CLI."
         },
         "tldiagram.cliPath": {
           "type": "string",
@@ -274,16 +244,6 @@
           "default": true,
           "description": "Automatically start tld watch when opening a workspace with .tld/ directory"
         },
-        "tldiagram.cloud.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable cloud login and sync features. Disabled by default while the extension focuses on local tld workflows."
-        },
-        "tldiagram.serverUrl": {
-          "type": "string",
-          "default": "https://tldiagram.com",
-          "description": "Base URL of your tlDiagram server (change only for self-hosted instances)"
-        },
         "tldiagram.watch.host": {
           "type": "string",
           "default": "127.0.0.1",
@@ -293,6 +253,37 @@
           "type": "integer",
           "default": 0,
           "description": "Port for the local watch/serve server (0 = auto-select free port)"
+        },
+        "tldiagram.uiColorMode": {
+          "type": "string",
+          "default": "vscodeTheme",
+          "enum": [
+            "vscodeTheme",
+            "palette"
+          ],
+          "enumDescriptions": [
+            "Import VS Code theme colors into tlDiagram accent, canvas, and element colors",
+            "Use the tlDiagram palette values configured below"
+          ],
+          "description": "Controls how tlDiagram chooses UI colors inside VS Code webviews."
+        },
+        "tldiagram.paletteAccent": {
+          "type": "string",
+          "default": "#63b3ed",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "description": "Accent color used when tlDiagram UI color mode is set to palette."
+        },
+        "tldiagram.paletteCanvas": {
+          "type": "string",
+          "default": "#10151f",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "description": "Canvas color used when tlDiagram UI color mode is set to palette."
+        },
+        "tldiagram.paletteElement": {
+          "type": "string",
+          "default": "#1f2937",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "description": "Element color used when tlDiagram UI color mode is set to palette."
         },
         "tldiagram.logLevel": {
           "type": "string",
@@ -316,11 +307,72 @@
           "description": "Controls verbosity of the tlDiagram output channel. Use 'debug' or 'trace' when reporting issues."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "tldiagram.getStarted",
+        "title": "Get Started with tlDiagram",
+        "description": "Live architecture diagrams that stay in sync with your code.",
+        "steps": [
+          {
+            "id": "tldiagram.welcome",
+            "title": "Welcome to tlDiagram",
+            "description": "tlDiagram keeps your architecture diagrams in sync with your codebase. Install the CLI to get started.",
+            "media": {
+              "image": "resources/logo-1024.png",
+              "altText": "tlDiagram logo"
+            }
+          },
+          {
+            "id": "tldiagram.installCli",
+            "title": "Install the tld CLI",
+            "description": "The CLI is required for local diagram workflows. Source: [github.com/Mertcikla/tld](https://github.com/Mertcikla/tld).\n\n[Install CLI](command:tldiagram.installCli)",
+            "media": {
+              "markdown": "resources/walkthrough/install-cli.md"
+            },
+            "completionEvents": [
+              "onCommand:tldiagram.verifyCli"
+            ]
+          },
+          {
+            "id": "tldiagram.authoringWorkflows",
+            "title": "Choose a workflow",
+            "description": "**Manual** — run `tld serve`, edit diagrams in the browser.\n\n**Analyze** — run `tld analyze` once to index your codebase and enable code↔diagram links.\n\n**Watch** — run `tld watch` for continuous sync as you code.\n\n[Open docs](command:tldiagram.openDocs)",
+            "media": {
+              "markdown": "resources/walkthrough/workflows.md"
+            }
+          },
+          {
+            "id": "tldiagram.sidebarViews",
+            "title": "Diagrams and Element Library",
+            "description": "Click the tlDiagram icon in the activity bar to browse diagrams and pick elements from the library.\n\n[Show Diagrams](command:tldiagram.focusDiagramsView) [Show Element Library](command:tldiagram.focusElementLibraryView)",
+            "media": {
+              "markdown": "resources/walkthrough/sidebar.md"
+            }
+          },
+          {
+            "id": "tldiagram.sourceLinks",
+            "title": "Jump between code and diagrams",
+            "description": "Right-click a file or symbol → **Go to Diagram** to open the linked diagram. Inside a diagram, click **Open in Editor** to jump back to source.",
+            "media": {
+              "markdown": "resources/walkthrough/source-links.md"
+            }
+          },
+          {
+            "id": "tldiagram.colors",
+            "title": "Customize colors",
+            "description": "tlDiagram automatically inherits your VS Code theme colors. Switch to a custom palette anytime in settings.\n\n[Configure colors](command:tldiagram.configureColors)",
+            "media": {
+              "markdown": "resources/walkthrough/colors.md"
+            }
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "compile:ext": "node esbuild.mjs",
-    "compile:webview": "cd ../frontend-wrapper && npm run build:vscode",
+    "compile:webview": "cd ../tld/frontend && npm run build:vscode",
     "compile": "npm run compile:ext && npm run compile:webview",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run compile && npx @vscode/vsce package",

@@ -21,21 +21,8 @@ export interface WatchStatus {
   connected_clients?: number
 }
 
-export interface DiffResult {
-  changed: boolean
-  scan: any
-  representation: any
-  diffs: any[]
-}
-
-export interface SyncStatus {
-  localChanges: number
-  needsPush: boolean
-  needsPull: boolean
-}
-
 export interface DataSource {
-  mode: 'local' | 'cloud'
+  mode: 'local'
 
   connect(): Promise<void>
   disconnect(): void
@@ -59,9 +46,4 @@ export interface DataSource {
   stopWatch(): Promise<void>
   getWatchStatus(): WatchStatus | null
   onWatchEvent(listener: (event: WatchEvent) => void): vscode.Disposable
-
-  exportToCloud(): Promise<void>
-  importFromCloud(): Promise<void>
-  diffWithCloud(): Promise<DiffResult>
-  getSyncStatus(): Promise<SyncStatus>
 }

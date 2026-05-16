@@ -17,7 +17,11 @@ import {
   type PlanConnector,
 } from '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/workspace_service_pb'
 
-import type { ValidatedUser } from '../auth/AuthManager'
+export interface ValidatedUser {
+  username: string
+  orgName: string
+  orgId: string
+}
 
 export interface Diagram {
   id: number
@@ -58,17 +62,10 @@ function normalizeElementType(kind?: string | null, type?: string | null): strin
 export class ExtensionApiClient {
   private readonly workspaceClient
 
-  constructor(
-    serverUrl: string,
-    apiKey: string,
-  ) {
+  constructor(serverUrl: string) {
     const transport = createConnectTransport({
       baseUrl: serverUrl.replace(/\/$/, '') + '/api',
-      fetch: (input, init) => {
-        const headers = new Headers(init?.headers)
-        headers.set('Authorization', `Bearer ${apiKey}`)
-        return fetch(input, { ...init, headers })
-      },
+      fetch: (input, init) => fetch(input, init),
     })
     this.workspaceClient = createClient(WorkspaceService, transport)
     logger.debug('ExtensionApiClient', 'Client created', { baseUrl: serverUrl.replace(/\/$/, '') + '/api' })
@@ -79,7 +76,7 @@ export class ExtensionApiClient {
     try {
       await this.workspaceClient.listViews({})
       logger.debug('ExtensionApiClient', 'getMe: success')
-      return { username: 'API Key', orgName: '', orgId: '' }
+      return { username: 'Local CLI', orgName: '', orgId: '' }
     } catch (e) {
       logger.error('ExtensionApiClient', 'getMe: failed', { error: String(e) })
       if (e instanceof ConnectError) throw new Error(e.message)
