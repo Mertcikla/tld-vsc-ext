@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 import { logger } from '../logger'
 import type { MessageRouter } from './MessageRouter'
-import type { WorkspaceSymbol } from '../../../frontend/src/types/vscode-messages'
+import type { WorkspaceSymbol } from './vscodeMessages'
 
 type PostMessageFn = (msg: unknown) => void
 
@@ -23,6 +23,30 @@ function normalizeSymbolKind(kind: string | undefined): string | undefined {
   return kind?.replace(/\s+/g, '').toLowerCase()
 }
 
+function symbolNameMatches(actualName: string, requestedName: string): boolean {
+  const actual = actualName.trim()
+  const requested = requestedName.trim()
+  if (!actual || !requested) return false
+  return actual === requested
+    || actual.endsWith(`.${requested}`)
+    || actual.endsWith(`::${requested}`)
+    || requested.endsWith(`.${actual}`)
+    || requested.endsWith(`::${actual}`)
+}
+
+async function fileExists(uri: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(uri)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function normalizeRelativePath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '')
+}
+
 /**
  * Handles workspace-related messages from the webview:
  *  - request-workspace-files  → findFiles → workspace-files response
@@ -30,6 +54,43 @@ function normalizeSymbolKind(kind: string | undefined): string | undefined {
  *  - open-file → showTextDocument at the given line
  */
 export class WorkspaceSymbolService {
+  private async resolveWorkspaceFile(filePath: string): Promise<vscode.Uri | undefined> {
+    const normalized = normalizeRelativePath(filePath)
+    const absolute = filePath.startsWith('/') ? vscode.Uri.file(filePath) : undefined
+    if (absolute && await fileExists(absolute)) return absolute
+
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? []
+    for (const folder of workspaceFolders) {
+      const direct = vscode.Uri.joinPath(folder.uri, normalized)
+      if (await fileExists(direct)) return direct
+    }
+
+    const matches = await vscode.workspace.findFiles(
+      `**/${normalized}`,
+      '**/{node_modules,.git}/**',
+      20,
+    )
+    if (matches.length === 0) {
+      logger.warn('WorkspaceSymbolService', 'Could not resolve workspace file', { filePath })
+      return undefined
+    }
+
+    const preferred = matches.find((uri) => !uri.fsPath.includes('/testdata/')) ?? matches[0]
+    if (matches.length > 1) {
+      logger.warn('WorkspaceSymbolService', 'Resolved workspace file via ambiguous suffix match', {
+        filePath,
+        selected: preferred.fsPath,
+        candidates: matches.map((uri) => uri.fsPath).slice(0, 5),
+      })
+    } else {
+      logger.debug('WorkspaceSymbolService', 'Resolved workspace file via suffix match', {
+        filePath,
+        selected: preferred.fsPath,
+      })
+    }
+    return preferred
+  }
+
   private async resolveSymbolStartLine(
     fileUri: vscode.Uri,
     symbolName: string,
@@ -43,7 +104,7 @@ export class WorkspaceSymbolService {
       const symbols = flattenDocumentSymbols(rawSymbols ?? [])
       const normalizedKind = normalizeSymbolKind(symbolKind)
       const exactMatch = symbols.find((symbol) => {
-        if (symbol.name !== symbolName) {
+        if (!symbolNameMatches(symbol.name, symbolName)) {
           return false
         }
         if (!normalizedKind) {
@@ -55,7 +116,7 @@ export class WorkspaceSymbolService {
         return exactMatch.selectionRange.start.line
       }
 
-      return symbols.find((symbol) => symbol.name === symbolName)?.selectionRange.start.line
+      return symbols.find((symbol) => symbolNameMatches(symbol.name, symbolName))?.selectionRange.start.line
     } catch (e) {
       logger.warn('WorkspaceSymbolService', 'resolveSymbolStartLine failed', {
         filePath: fileUri.fsPath,
@@ -108,7 +169,11 @@ export class WorkspaceSymbolService {
         return
       }
 
-      const fileUri = vscode.Uri.joinPath(workspaceRoot, msg.filePath)
+      const fileUri = await this.resolveWorkspaceFile(msg.filePath)
+      if (!fileUri) {
+        this.postMessage({ type: 'workspace-symbols', requestId: msg.requestId, symbols: [] })
+        return
+      }
       try {
         const rawSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
           'vscode.executeDocumentSymbolProvider',
@@ -144,12 +209,15 @@ export class WorkspaceSymbolService {
         symbolKind: msg.symbolKind,
       })
 
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
-      if (!workspaceRoot) {
+      if (!vscode.workspace.workspaceFolders?.length) {
         logger.warn('WorkspaceSymbolService', 'open-file: no workspace root')
         return
       }
-      const fileUri = vscode.Uri.joinPath(workspaceRoot, msg.filePath)
+      const fileUri = await this.resolveWorkspaceFile(msg.filePath)
+      if (!fileUri) {
+        vscode.window.showWarningMessage(`Could not find source file: ${msg.filePath}`)
+        return
+      }
 
       let startLine = msg.symbolName
         ? await this.resolveSymbolStartLine(fileUri, msg.symbolName, msg.symbolKind)
@@ -184,13 +252,16 @@ export class WorkspaceSymbolService {
         startLine: msg.startLine
       })
 
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri
-      if (!workspaceRoot) {
+      if (!vscode.workspace.workspaceFolders?.length) {
         this.postMessage({ type: 'file-content', requestId: msg.requestId, content: '', startLineOffset: 0 })
         return
       }
       
-      const fileUri = vscode.Uri.joinPath(workspaceRoot, msg.filePath)
+      const fileUri = await this.resolveWorkspaceFile(msg.filePath)
+      if (!fileUri) {
+        this.postMessage({ type: 'file-content', requestId: msg.requestId, content: '', startLineOffset: 0 })
+        return
+      }
       try {
         const fileData = await vscode.workspace.fs.readFile(fileUri)
         const fileContent = Buffer.from(fileData).toString('utf-8')

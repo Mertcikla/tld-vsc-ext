@@ -42,15 +42,20 @@ export class ElementCacheService {
       logger.debug('ElementCacheService', 'Refreshing cache')
       const allElements = await this.client.listElements()
       this.elements = allElements
-      const repoInfo = await this.gitService.getRepoInfo()
+      const shouldFilterRepo = this.client.mode !== 'local'
+      const repoInfo = shouldFilterRepo ? await this.gitService.getRepoInfo() : null
       this._fileIndex.clear()
+      let elementsWithFilePath = 0
+      let skippedByRepo = 0
 
       for (const el of allElements) {
         if (!el.file_path) continue
-        if (el.repo || el.branch) {
-          if (!repoInfo) continue
-          if (el.repo && el.repo !== repoInfo.repo) continue
-          if (el.branch && el.branch !== repoInfo.branch) continue
+        elementsWithFilePath++
+        if (shouldFilterRepo && (el.repo || el.branch)) {
+          if (!repoInfo || (el.repo && el.repo !== repoInfo.repo) || (el.branch && el.branch !== repoInfo.branch)) {
+            skippedByRepo++
+            continue
+          }
         }
         const anchorIdx = el.file_path.indexOf('#')
         const relPath = this.normalizePath(
@@ -63,7 +68,9 @@ export class ElementCacheService {
 
       logger.info('ElementCacheService', 'Refresh complete', {
         totalElements: allElements.length,
-        indexedFiles: this._fileIndex.size
+        elementsWithFilePath,
+        indexedFiles: this._fileIndex.size,
+        skippedByRepo,
       })
       this._onDidChange.fire()
     } catch (e) {
@@ -105,17 +112,27 @@ export class ElementCacheService {
 
   getElementsForSymbol(relPath: string, symbolName: string): DiagElementData[] {
     const fileElements = this.getElementsForFile(relPath)
+    const normalizedSymbolName = symbolName.trim()
+    const symbolNameMatches = (elementName: string | undefined): boolean => {
+      const normalizedElementName = elementName?.trim()
+      if (!normalizedElementName || !normalizedSymbolName) return false
+      return normalizedElementName === normalizedSymbolName
+        || normalizedElementName.endsWith(`.${normalizedSymbolName}`)
+        || normalizedElementName.endsWith(`::${normalizedSymbolName}`)
+        || normalizedElementName.endsWith(`#${normalizedSymbolName}`)
+    }
+
     return fileElements.filter(el => {
       if (!el.file_path) return false
       const anchorIdx = el.file_path.indexOf('#')
-      if (anchorIdx === -1) return false
+      if (anchorIdx === -1) return symbolNameMatches(el.name)
 
       const anchorStr = el.file_path.substring(anchorIdx + 1)
       try {
         const anchorData = JSON.parse(decodeURIComponent(anchorStr))
-        return anchorData.name === symbolName
+        return anchorData.name === normalizedSymbolName || symbolNameMatches(el.name)
       } catch (e) {
-        return false
+        return symbolNameMatches(el.name)
       }
     })
   }

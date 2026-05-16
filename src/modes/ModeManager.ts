@@ -1,11 +1,10 @@
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as path from 'path'
 import { logger } from '../logger'
 import type { AuthManager } from '../auth/AuthManager'
 import { type DataSource } from '../datasource/DataSource'
 import { CloudDataSource } from '../datasource/CloudDataSource'
 import { LocalDataSource } from '../datasource/LocalDataSource'
+import { CLIManager } from '../cli/CLIManager'
 
 type Mode = 'local' | 'cloud' | 'auto'
 
@@ -16,6 +15,7 @@ export class ModeManager {
   private dataSource: DataSource | undefined
   private cloudDs: CloudDataSource | undefined
   private localDs: LocalDataSource | undefined
+  private readonly cliManager = new CLIManager()
 
   constructor(
     private readonly authManager: AuthManager,
@@ -27,7 +27,12 @@ export class ModeManager {
 
   async initialize(): Promise<DataSource | undefined> {
     const mode = this.getConfiguredMode()
-    logger.info('ModeManager', 'Initializing', { mode })
+    const cloudEnabled = this.isCloudEnabled()
+    logger.info('ModeManager', 'Initializing', { mode, cloudEnabled })
+
+    if (!cloudEnabled) {
+      return this.switchToLocal()
+    }
 
     if (mode === 'auto') {
       return this.autoSelect()
@@ -42,30 +47,50 @@ export class ModeManager {
     return vscode.workspace.getConfiguration('tldiagram').get<Mode>('mode', 'auto')
   }
 
-  private getAutoStartWatch(): boolean {
-    return vscode.workspace.getConfiguration('tldiagram').get<boolean>('autoStartWatch', true)
+  isCloudEnabled(): boolean {
+    return vscode.workspace.getConfiguration('tldiagram').get<boolean>('cloud.enabled', false)
   }
 
   private getServerUrl(): string {
     return vscode.workspace.getConfiguration('tldiagram').get<string>('serverUrl', 'https://tldiagram.com').replace(/\/$/, '')
   }
 
-  private hasTldWorkspace(): boolean {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (!root) return false
-    return fs.existsSync(path.join(root, '.tld')) || fs.existsSync(path.join(root, 'tld'))
+  private getWatchHost(): string {
+    return vscode.workspace.getConfiguration('tldiagram').get<string>('watch.host', '127.0.0.1') || '127.0.0.1'
+  }
+
+  private getWatchPort(): number {
+    return vscode.workspace.getConfiguration('tldiagram').get<number>('watch.port', 0)
   }
 
   private updateContext(mode: 'local' | 'cloud' | undefined, hybrid: boolean): void {
     void vscode.commands.executeCommand('setContext', 'tldiagram.mode', mode)
-    void vscode.commands.executeCommand('setContext', 'tldiagram.hybrid', hybrid)
+    void vscode.commands.executeCommand('setContext', 'tldiagram.cloudEnabled', this.isCloudEnabled())
+    void vscode.commands.executeCommand('setContext', 'tldiagram.hybrid', this.isCloudEnabled() && hybrid)
+  }
+
+  refreshFeatureContexts(): void {
+    this.updateContext(this.dataSource?.mode, !!this.cloudDs && !!this.localDs)
   }
 
   async switchToLocal(): Promise<DataSource> {
     logger.info('ModeManager', 'Switching to local mode')
-    await this.disconnectCloud()
+    if (!this.isCloudEnabled()) {
+      await this.disconnectCloud()
+    }
 
-    const ds = new LocalDataSource()
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (!workspaceRoot) {
+      throw new Error('Open a workspace folder before using tlDiagram local mode.')
+    }
+
+    const tldPath = await this.cliManager.detect()
+    if (!tldPath) {
+      vscode.window.showErrorMessage('tlDiagram local mode requires the tld CLI. Set "tlDiagram › Cli Path" or install tld on PATH.')
+      throw new Error('tld CLI not found. Set "tlDiagram › Cli Path" or install tld on PATH.')
+    }
+
+    const ds = new LocalDataSource(tldPath, workspaceRoot, this.getWatchHost(), this.getWatchPort())
     try {
       await ds.connect()
     } catch (e) {
@@ -82,21 +107,15 @@ export class ModeManager {
 
     void vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', true)
 
-    if (this.getAutoStartWatch() && this.hasTldWorkspace()) {
-      logger.info('ModeManager', 'Auto-starting watch')
-      try {
-        await ds.startWatch(vscode.workspace.workspaceFolders![0].uri.fsPath)
-      } catch (e) {
-        logger.warn('ModeManager', 'Auto-start watch failed', { error: String(e) })
-      }
-    }
-
     vscode.window.showInformationMessage('tlDiagram: Connected to local workspace')
     this._onDataSourceChange.fire(ds)
     return ds
   }
 
   async switchToCloud(): Promise<DataSource> {
+    if (!this.isCloudEnabled()) {
+      throw new Error('Cloud features are disabled. Enable "tlDiagram › Cloud: Enabled" to use cloud mode.')
+    }
     logger.info('ModeManager', 'Switching to cloud mode')
     await this.disconnectLocal()
 
@@ -134,50 +153,30 @@ export class ModeManager {
     logger.info('ModeManager', 'Auto-selecting mode')
 
     const tldFound = await this.checkTldAvailable()
-    const hasKey = !!(await this.authManager.getKey())
 
     if (tldFound) {
       logger.info('ModeManager', 'Auto: CLI found, using local mode')
       return this.switchToLocal()
     }
 
-    if (hasKey) {
+    if (this.isCloudEnabled() && !!(await this.authManager.getKey())) {
       logger.info('ModeManager', 'Auto: No CLI, using cloud mode')
       return this.switchToCloud()
     }
 
-    logger.info('ModeManager', 'Auto: Neither CLI nor API key available — showing setup prompt')
+    logger.info('ModeManager', 'Auto: CLI unavailable and cloud disabled')
     this.updateContext(undefined, false)
     void vscode.commands.executeCommand('setContext', 'tldiagram.authenticated', false)
-
-    const choice = await vscode.window.showInformationMessage(
-      'tlDiagram: Choose your connection mode',
-      { modal: false },
-      'Connect to Cloud',
-      'Use Local CLI',
-    )
-
-    if (choice === 'Connect to Cloud') {
-      return this.switchToCloud()
-    }
-    if (choice === 'Use Local CLI') {
-      return this.switchToLocal()
-    }
+    vscode.window.showErrorMessage('tlDiagram local mode requires the tld CLI. Set "tlDiagram › Cli Path" or install tld on PATH.')
     return undefined
   }
 
   private async checkTldAvailable(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const proc = require('child_process').spawn('tld', ['--version'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      proc.on('close', (code: number) => resolve(code === 0))
-      proc.on('error', () => resolve(false))
-    })
+    return (await this.cliManager.detect()) !== null
   }
 
   private async fallbackToCloud(): Promise<DataSource> {
-    const hasKey = !!(await this.authManager.getKey())
+    const hasKey = this.isCloudEnabled() && !!(await this.authManager.getKey())
     if (hasKey) {
       logger.info('ModeManager', 'Falling back to cloud mode')
       return this.switchToCloud()

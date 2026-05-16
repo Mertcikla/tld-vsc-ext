@@ -19,6 +19,8 @@ export class WebviewManager {
   setDataSource(dataSource: DataSource): void {
     if (dataSource.mode === 'local') {
       this.serverUrl = (dataSource as any).baseUrl || 'http://127.0.0.1:8060'
+    } else {
+      this.serverUrl = (dataSource as any).serverUrl || this.serverUrl
     }
   }
 

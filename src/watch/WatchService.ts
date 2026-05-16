@@ -22,7 +22,6 @@ class WebSocketConnection extends EventEmitter {
   connect(url: string): void {
     const parsed = new URL(url)
     const isSecure = parsed.protocol === 'wss:'
-    const mod = isSecure ? require('tls') as typeof import('tls') : require('net') as typeof import('net')
     const port = parsed.port ? parseInt(parsed.port, 10) : (isSecure ? 443 : 80)
     const hostname = parsed.hostname
 
@@ -39,9 +38,13 @@ class WebSocketConnection extends EventEmitter {
       '',
     ].join('\r\n')
 
-    const socket = mod.connect(port, hostname, () => {
-      socket.write(request)
-    })
+    const socket = isSecure
+      ? (require('tls') as typeof import('tls')).connect({ port, host: hostname }, () => {
+        socket.write(request)
+      })
+      : (require('net') as typeof import('net')).connect(port, hostname, () => {
+        socket.write(request)
+      })
 
     let headers = ''
     socket.on('data', (data: Buffer) => {
@@ -157,26 +160,36 @@ class WebSocketConnection extends EventEmitter {
 
   private sendFrame(opcode: number, payload: Buffer, isPong = false): void {
     if (!this.socket) return
-    const fin = isPong ? 0x8a : 0x81
+    const fin = 0x80 | opcode
+    const mask = crypto.randomBytes(4)
     let frame: Buffer
     if (payload.length < 126) {
-      frame = Buffer.alloc(2 + payload.length)
+      frame = Buffer.alloc(2 + 4 + payload.length)
       frame[0] = fin
-      frame[1] = payload.length
-      payload.copy(frame, 2)
+      frame[1] = 0x80 | payload.length
+      mask.copy(frame, 2)
+      for (let i = 0; i < payload.length; i++) {
+        frame[6 + i] = payload[i] ^ mask[i % 4]
+      }
     } else if (payload.length < 65536) {
-      frame = Buffer.alloc(4 + payload.length)
+      frame = Buffer.alloc(4 + 4 + payload.length)
       frame[0] = fin
-      frame[1] = 126
+      frame[1] = 0x80 | 126
       frame.writeUInt16BE(payload.length, 2)
-      payload.copy(frame, 4)
+      mask.copy(frame, 4)
+      for (let i = 0; i < payload.length; i++) {
+        frame[8 + i] = payload[i] ^ mask[i % 4]
+      }
     } else {
-      frame = Buffer.alloc(10 + payload.length)
+      frame = Buffer.alloc(10 + 4 + payload.length)
       frame[0] = fin
-      frame[1] = 127
+      frame[1] = 0x80 | 127
       frame.writeUInt32BE(Math.floor(payload.length / 0x100000000), 2)
       frame.writeUInt32BE(payload.length % 0x100000000, 6)
-      payload.copy(frame, 10)
+      mask.copy(frame, 10)
+      for (let i = 0; i < payload.length; i++) {
+        frame[14 + i] = payload[i] ^ mask[i % 4]
+      }
     }
     this.socket.write(frame)
   }
@@ -207,20 +220,11 @@ export class WatchService {
 
   async start(): Promise<void> {
     logger.info('WatchService', 'Starting watch')
-
-    // Initiate watch via HTTP API
-    const repos = await this.httpGet('/api/watch/repositories')
-    let repoId: number | undefined
-    if (Array.isArray(repos) && repos.length > 0) {
-      repoId = repos[0].id
-    }
-
-    if (repoId != null) {
-      await this.httpPost(`/api/watch/repositories/${repoId}/represent`)
-    }
-
     this.shouldReconnect = true
-    await this.connectWebSocket()
+    if (!this.ws) {
+      await this.connectWebSocket()
+    }
+    await this.requestStatus()
     this.currentStatus = { active: true }
   }
 
@@ -232,6 +236,11 @@ export class WatchService {
       this.reconnectTimer = null
     }
     if (this.ws) {
+      try {
+        this.ws.send(JSON.stringify({ type: 'watch.stop' }))
+      } catch (e) {
+        logger.warn('WatchService', 'Failed to send watch.stop', { error: String(e) })
+      }
       this.ws.close()
     }
     this.currentStatus = { active: false }

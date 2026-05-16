@@ -15,7 +15,7 @@ import {
   ListElementPlacementsResponseSchema,
   type PlanElement,
   type PlanConnector,
-} from '../../../frontend/src/gen/diag/v1/workspace_service_pb'
+} from '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/workspace_service_pb'
 
 import type { ValidatedUser } from '../auth/AuthManager'
 
@@ -98,7 +98,7 @@ export class ExtensionApiClient {
       level: d.level,
       created_at: d.createdAt ? new Date(Number(d.createdAt.seconds) * 1000).toISOString() : new Date().toISOString(),
       updated_at: d.updatedAt ? new Date(Number(d.updatedAt.seconds) * 1000).toISOString() : new Date().toISOString(),
-      parent_diagram_id: d.parentDiagramId ?? null,
+      parent_diagram_id: d.parentViewId ?? null,
     }))
     logger.debug('ExtensionApiClient', 'listDiagrams: done', { count: diagrams.length })
     return diagrams
@@ -106,18 +106,29 @@ export class ExtensionApiClient {
 
   async listElements(): Promise<DiagElementData[]> {
     logger.debug('ExtensionApiClient', 'listElements')
-    const res = await this.workspaceClient.listElements({ limit: 1000 })
-    const json = j<{ elements: Array<{ id: number; name: string; type?: string | null; kind?: string | null; technology?: string | null; repo?: string | null; branch?: string | null; language?: string | null; file_path?: string | null }> }>(ListElementsResponseSchema, res)
-    const elements = (json.elements ?? []).map((o) => ({
-      id: o.id,
-      name: o.name,
-      type: normalizeElementType(o.kind, o.type),
-      technology: o.technology ?? null,
-      repo: o.repo ?? null,
-      branch: o.branch ?? null,
-      language: o.language ?? null,
-      file_path: o.file_path ?? null,
-    }))
+    const pageSize = 5000
+    const elements: DiagElementData[] = []
+    let offset = 0
+
+    for (;;) {
+      const res = await this.workspaceClient.listElements({ limit: pageSize, offset })
+      const page = res.elements ?? []
+      elements.push(...page.map((o) => ({
+        id: Number(o.id),
+        name: o.name,
+        type: normalizeElementType(o.kind, undefined),
+        technology: o.technology ?? null,
+        repo: o.repo ?? null,
+        branch: o.branch ?? null,
+        language: o.language ?? null,
+        file_path: o.filePath ?? null,
+      })))
+
+      const totalCount = res.pagination?.totalCount
+      offset += page.length
+      if (page.length === 0 || page.length < pageSize || (typeof totalCount === 'number' && offset >= totalCount)) break
+    }
+
     logger.debug('ExtensionApiClient', 'listElements: done', { count: elements.length })
     return elements
   }
@@ -131,7 +142,7 @@ export class ExtensionApiClient {
 
   async createDiagram(name: string, parentDiagramId?: number): Promise<Diagram> {
     logger.info('ExtensionApiClient', 'createDiagram', { name, parentDiagramId })
-    const res = await this.workspaceClient.createView({ name, parentDiagramId })
+    const res = await this.workspaceClient.createView({ name, ownerElementId: parentDiagramId })
     const json = j<{ view: Diagram }>(CreateViewResponseSchema, res)
     logger.info('ExtensionApiClient', 'createDiagram: created', { id: json.view.id, name: json.view.name })
     return json.view
@@ -139,7 +150,7 @@ export class ExtensionApiClient {
 
   async renameDiagram(id: number, name: string): Promise<Diagram> {
     logger.info('ExtensionApiClient', 'renameDiagram', { id, name })
-    const res = await this.workspaceClient.updateView({ diagramId: id, name })
+    const res = await this.workspaceClient.updateView({ viewId: id, name })
     const json = j<{ view: Diagram }>(UpdateViewResponseSchema, res)
     logger.debug('ExtensionApiClient', 'renameDiagram: done')
     return json.view
@@ -147,7 +158,7 @@ export class ExtensionApiClient {
 
   async deleteDiagram(orgId: string, id: number): Promise<void> {
     logger.info('ExtensionApiClient', 'deleteDiagram', { orgId, id })
-    await this.workspaceClient.deleteView({ orgId, diagramId: id })
+    await this.workspaceClient.deleteView({ orgId, viewId: id })
     logger.debug('ExtensionApiClient', 'deleteDiagram: done')
   }
 
@@ -159,7 +170,7 @@ export class ExtensionApiClient {
     logger.debug('ExtensionApiClient', 'createElement', { name: props.name, type: props.type })
     const res = await this.workspaceClient.createElement({
       name: props.name,
-      type: props.type,
+      kind: props.type,
       filePath: props.filePath,
       technologyLinks: [],
       tags: [],
@@ -171,7 +182,7 @@ export class ExtensionApiClient {
 
   async addElementToDiagram(diagramId: number, objectId: number, x: number, y: number): Promise<void> {
     logger.trace('ExtensionApiClient', 'addElementToDiagram', { diagramId, objectId, x, y })
-    await this.workspaceClient.createPlacement({ diagramId, objectId, positionX: x, positionY: y })
+    await this.workspaceClient.createPlacement({ viewId: diagramId, elementId: objectId, positionX: x, positionY: y })
   }
 
   async applyPlan(params: {

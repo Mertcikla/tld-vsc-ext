@@ -4,6 +4,7 @@ import * as vscode from 'vscode'
 import { logger } from '../logger'
 import { ExtensionApiClient, type Diagram, type DiagElementData } from '../api/ExtensionApiClient'
 import type { DataSource, WatchEvent, WatchStatus, DiffResult, SyncStatus } from './DataSource'
+import { WatchService } from '../watch/WatchService'
 
 const LOCAL_WORKSPACE_ID = '11111111-1111-1111-1111-111111111111'
 
@@ -20,22 +21,6 @@ function getFreePort(): Promise<number> {
       server.close(() => resolve(port))
     })
     server.on('error', reject)
-  })
-}
-
-async function findTldBinary(): Promise<string | null> {
-  return new Promise((resolve) => {
-    const proc = cp.spawn('which', ['tld'], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
-    proc.on('close', (code) => {
-      if (code === 0 && stdout.trim()) {
-        resolve(stdout.trim())
-      } else {
-        resolve(null)
-      }
-    })
-    proc.on('error', () => resolve(null))
   })
 }
 
@@ -68,111 +53,87 @@ function waitForReady(baseUrl: string, maxRetries = 30, intervalMs = 500): Promi
   })
 }
 
-function createWatchService(baseUrl: string, repoPath: string): {
-  startWatch(path: string): Promise<void>
-  stopWatch(): Promise<void>
-  getWatchStatus(): WatchStatus | null
-  onWatchEvent(listener: (event: WatchEvent) => void): vscode.Disposable
-} {
-  let watchService: any
-  try {
-    const { WatchService } = require('../watch/WatchService')
-    watchService = new WatchService(baseUrl, repoPath)
-  } catch {
-    watchService = null
-  }
-
-  return {
-    async startWatch(path: string) {
-      if (watchService) await watchService.start()
-    },
-    async stopWatch() {
-      if (watchService) await watchService.stop()
-    },
-    getWatchStatus(): WatchStatus | null {
-      return watchService?.getStatus() ?? null
-    },
-    onWatchEvent(listener: (event: WatchEvent) => void): vscode.Disposable {
-      if (watchService) {
-        const sub = watchService.onEvent(listener)
-        return new vscode.Disposable(() => sub.dispose())
-      }
-      return new vscode.Disposable(() => {})
-    },
-  }
-}
-
 export class LocalDataSource implements DataSource {
   readonly mode = 'local' as const
 
   private client: ExtensionApiClient | null = null
-  private serveProcess: cp.ChildProcess | null = null
+  private watchProcess: cp.ChildProcess | null = null
   private port: number = 0
-  private host: string = '127.0.0.1'
-  private watchService: ReturnType<typeof createWatchService> | null = null
+  private watchService: WatchService | null = null
+  private reconnectPromise: Promise<void> | null = null
+
+  constructor(
+    private readonly tldPath: string,
+    private readonly workspaceRoot: string,
+    private readonly host: string = '127.0.0.1',
+    private readonly configuredPort: number = 0,
+  ) {}
 
   async connect(): Promise<void> {
-    const tldPath = await findTldBinary()
-    if (!tldPath) {
-      throw new Error(
-        'tld CLI not found on PATH. Install tlDiagram CLI or switch to cloud mode.'
-      )
-    }
+    const port = this.configuredPort > 0 ? this.configuredPort : await getFreePort()
+    logger.info('LocalDataSource', 'Starting tld watch', {
+      tldPath: this.tldPath,
+      workspaceRoot: this.workspaceRoot,
+      host: this.host,
+      port,
+    })
 
-    const port = await getFreePort()
-    logger.info('LocalDataSource', 'Starting tld serve', { tldPath, port })
-
-    this.serveProcess = cp.spawn(tldPath, [
-      'serve',
-      '--foreground',
+    this.watchProcess = cp.spawn(this.tldPath, [
+      'watch',
+      this.workspaceRoot,
       '--host', this.host,
       '--port', String(port),
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
+      cwd: this.workspaceRoot,
     })
 
     let stderr = ''
-    this.serveProcess.stderr?.on('data', (d: Buffer) => { stderr += d.toString() })
-    this.serveProcess.stdout?.on('data', (d: Buffer) => {
-      logger.trace('LocalDataSource', 'tld serve stdout', { line: d.toString().trim() })
+    this.watchProcess.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString()
+      logger.trace('LocalDataSource', 'tld watch stderr', { line: d.toString().trim() })
+    })
+    this.watchProcess.stdout?.on('data', (d: Buffer) => {
+      logger.trace('LocalDataSource', 'tld watch stdout', { line: d.toString().trim() })
     })
 
-    this.serveProcess.on('exit', (code) => {
-      logger.info('LocalDataSource', 'tld serve exited', { code })
-      this.serveProcess = null
+    this.watchProcess.on('exit', (code) => {
+      logger.info('LocalDataSource', 'tld watch exited', { code })
+      this.watchProcess = null
     })
 
     const baseUrl = `http://${this.host}:${port}`
     try {
       await waitForReady(baseUrl)
     } catch (e) {
-      logger.error('LocalDataSource', 'tld serve failed to start', {
+      logger.error('LocalDataSource', 'tld watch failed to start', {
         error: String(e),
         stderr: stderr.slice(-500),
       })
-      this.killServe()
-      throw new Error(`tld serve failed to start: ${stderr.slice(-200)}`)
+      this.killWatch()
+      throw new Error(`tld watch failed to start: ${stderr.slice(-200)}`)
     }
 
     this.port = port
     this.client = new ExtensionApiClient(baseUrl, '')
-    this.watchService = createWatchService(baseUrl, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.')
+    this.watchService = new WatchService(baseUrl, this.workspaceRoot)
+    await this.watchService.start()
     logger.info('LocalDataSource', 'Connected', { baseUrl })
   }
 
   disconnect(): void {
-    this.watchService?.stopWatch()
+    void this.watchService?.stop()
     this.watchService = null
-    this.killServe()
+    this.killWatch()
     this.client = null
     logger.info('LocalDataSource', 'Disconnected')
   }
 
-  private killServe(): void {
-    if (this.serveProcess) {
-      this.serveProcess.kill()
-      this.serveProcess = null
+  private killWatch(): void {
+    if (this.watchProcess) {
+      this.watchProcess.kill()
+      this.watchProcess = null
       this.port = 0
     }
   }
@@ -181,13 +142,56 @@ export class LocalDataSource implements DataSource {
     return `http://${this.host}:${this.port}`
   }
 
+  getWatchService(): WatchService | undefined {
+    return this.watchService ?? undefined
+  }
+
   private ensureClient(): ExtensionApiClient {
     if (!this.client) throw new Error('Not connected to local server')
     return this.client
   }
 
+  private isTransientLocalServerError(error: unknown): boolean {
+    const message = String(error)
+    return message.includes('fetch failed')
+      || message.includes('ECONNREFUSED')
+      || message.includes('socket hang up')
+      || message.includes('Failed to fetch')
+  }
+
+  private async restart(): Promise<void> {
+    if (!this.reconnectPromise) {
+      this.reconnectPromise = (async () => {
+        logger.warn('LocalDataSource', 'Restarting local tld watch server')
+        try {
+          await this.watchService?.stop()
+        } catch (e) {
+          logger.warn('LocalDataSource', 'Failed to stop watch service during restart', { error: String(e) })
+        }
+        this.watchService = null
+        this.client = null
+        this.killWatch()
+        await this.connect()
+      })().finally(() => {
+        this.reconnectPromise = null
+      })
+    }
+    await this.reconnectPromise
+  }
+
+  private async withReconnect<T>(operation: (client: ExtensionApiClient) => Promise<T>): Promise<T> {
+    try {
+      return await operation(this.ensureClient())
+    } catch (error) {
+      if (!this.isTransientLocalServerError(error)) throw error
+      logger.warn('LocalDataSource', 'Local server request failed; retrying after restart', { error: String(error) })
+      await this.restart()
+      return operation(this.ensureClient())
+    }
+  }
+
   listDiagrams(): Promise<Diagram[]> {
-    return this.ensureClient().listDiagrams()
+    return this.withReconnect((client) => client.listDiagrams())
   }
 
   createDiagram(name: string, parentDiagramId?: number): Promise<Diagram> {
@@ -203,7 +207,7 @@ export class LocalDataSource implements DataSource {
   }
 
   listElements(): Promise<DiagElementData[]> {
-    return this.ensureClient().listElements()
+    return this.withReconnect((client) => client.listElements())
   }
 
   createElement(props: { name: string; type?: string; filePath?: string }): Promise<{ id: number }> {
@@ -215,7 +219,7 @@ export class LocalDataSource implements DataSource {
   }
 
   listElementPlacements(elementId: number): Promise<{ view_id: number; view_name: string }[]> {
-    return this.ensureClient().listElementPlacements(elementId)
+    return this.withReconnect((client) => client.listElementPlacements(elementId))
   }
 
   isWatchAvailable(): boolean {
@@ -223,24 +227,32 @@ export class LocalDataSource implements DataSource {
   }
 
   async startWatch(path: string): Promise<void> {
+    if (!this.watchProcess || !this.watchService) {
+      await this.connect()
+      return
+    }
     if (this.watchService) {
-      await this.watchService.startWatch(path)
+      await this.watchService.start()
     }
   }
 
   async stopWatch(): Promise<void> {
     if (this.watchService) {
-      await this.watchService.stopWatch()
+      await this.watchService.stop()
     }
+    this.watchService = null
+    this.client = null
+    this.killWatch()
   }
 
   getWatchStatus(): WatchStatus | null {
-    return this.watchService?.getWatchStatus() ?? null
+    return this.watchService?.getStatus() ?? null
   }
 
   onWatchEvent(listener: (event: WatchEvent) => void): vscode.Disposable {
     if (this.watchService) {
-      return this.watchService.onWatchEvent(listener)
+      const sub = this.watchService.onEvent(listener)
+      return new vscode.Disposable(() => sub.dispose())
     }
     return new vscode.Disposable(() => {})
   }

@@ -30,7 +30,7 @@ export function getWebviewHtml(
     ? `${serverUrl} ${wsUrl}`
     : `${serverUrl} ${wsUrl}`
   const imgFontSrc = isLocal
-    ? `${webview.cspSource} https: data: blob:`
+    ? `${webview.cspSource} ${serverUrl} https: data: blob:`
     : `${webview.cspSource} https://tldiagram.com https: data: blob:`
 
   return `<!DOCTYPE html>

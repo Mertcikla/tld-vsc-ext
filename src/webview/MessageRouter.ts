@@ -1,5 +1,5 @@
 import { logger } from '../logger'
-import type { WebviewToExtensionMessage } from '../../../frontend/src/types/vscode-messages'
+import type { WebviewToExtensionMessage } from './vscodeMessages'
 
 type MessageHandler = (msg: WebviewToExtensionMessage) => void | Promise<void>
 

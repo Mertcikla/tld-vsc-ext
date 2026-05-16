@@ -5,6 +5,7 @@ import { AuthUriHandler } from './auth/AuthUriHandler'
 import * as cp from 'child_process'
 import * as util from 'util'
 const execAsync = util.promisify(cp.exec)
+const execFileAsync = util.promisify(cp.execFile)
 import { type DiagElementData } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ElementLibraryTreeProvider } from './tree/ElementLibraryTreeProvider'
@@ -23,6 +24,7 @@ import { WorkspaceSymbolProvider } from './provider/WorkspaceSymbolProvider'
 import { SyncService } from './sync/SyncService'
 import { SyncStatusBar } from './sync/SyncStatusBar'
 import { DiffDocument } from './sync/DiffDocument'
+import { CLIManager } from './cli/CLIManager'
 
 function getServerUrl(): string {
   return vscode.workspace
@@ -50,11 +52,31 @@ async function execLogged(command: string, options?: cp.ExecOptions): Promise<{ 
   logger.info('extension', 'Running command', { command, cwd: options?.cwd })
   try {
     const result = await execAsync(command, options)
-    logCommandOutput(command, 'stdout', result.stdout)
-    logCommandOutput(command, 'stderr', result.stderr)
-    return result
+    const stdout = String(result.stdout)
+    const stderr = String(result.stderr)
+    logCommandOutput(command, 'stdout', stdout)
+    logCommandOutput(command, 'stderr', stderr)
+    return { stdout, stderr }
   } catch (error) {
     const execError = error as cp.ExecException & { stdout?: string; stderr?: string }
+    logCommandOutput(command, 'stdout', execError.stdout ?? '')
+    logCommandOutput(command, 'stderr', execError.stderr ?? '')
+    throw error
+  }
+}
+
+async function execFileLogged(file: string, args: string[], options?: cp.ExecFileOptions): Promise<{ stdout: string; stderr: string }> {
+  const command = [file, ...args].join(' ')
+  logger.info('extension', 'Running command', { command, cwd: options?.cwd })
+  try {
+    const result = await execFileAsync(file, args, options)
+    const stdout = String(result.stdout)
+    const stderr = String(result.stderr)
+    logCommandOutput(command, 'stdout', stdout)
+    logCommandOutput(command, 'stderr', stderr)
+    return { stdout, stderr }
+  } catch (error) {
+    const execError = error as cp.ExecFileException & { stdout?: string; stderr?: string }
     logCommandOutput(command, 'stdout', execError.stdout ?? '')
     logCommandOutput(command, 'stderr', execError.stderr ?? '')
     throw error
@@ -71,7 +93,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.window.registerUriHandler(authUriHandler))
 
   const modeManager = new ModeManager(authManager)
+  const cliManager = new CLIManager()
   context.subscriptions.push(new vscode.Disposable(() => { void modeManager.dispose() }))
+  modeManager.refreshFeatureContexts()
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
+    if (event.affectsConfiguration('tldiagram.cloud.enabled')) {
+      modeManager.refreshFeatureContexts()
+      if (!modeManager.isCloudEnabled()) {
+        disposeSync()
+      }
+    }
+  }))
 
   let dataSource: DataSource | undefined
 
@@ -120,20 +152,41 @@ export function activate(context: vscode.ExtensionContext): void {
   const resolveElementForGoToDiagram = async (
     args?: { elementId?: number; elementName?: string } | vscode.Uri,
   ): Promise<DiagElementData | undefined> => {
-    if (args && !vscode.Uri.isUri(args) && typeof args.elementId === 'number') {
-      return { id: args.elementId, name: args.elementName ?? `Element ${args.elementId}` }
+    const isUriArg = args instanceof vscode.Uri
+    if (args && !isUriArg && typeof args.elementId === 'number') {
+      return {
+        id: args.elementId,
+        name: args.elementName ?? `Element ${args.elementId}`,
+        type: 'Component',
+      }
     }
-    const targetUri = vscode.Uri.isUri(args)
+    const targetUri = isUriArg
       ? args
       : vscode.window.activeTextEditor?.document.uri
     if (!targetUri) return undefined
     const relPath = getWorkspaceRelativePath(targetUri)
     if (!relPath) return undefined
+    const elementsForFile = async (): Promise<DiagElementData[]> => {
+      let elements = elementCacheService.getElementsForFile(relPath)
+      if (elements.length === 0) {
+        await elementCacheService.refresh()
+        elements = elementCacheService.getElementsForFile(relPath)
+      }
+      return elements
+    }
+    const elementsForSymbol = async (symbolName: string): Promise<DiagElementData[]> => {
+      let elements = elementCacheService.getElementsForSymbol(relPath, symbolName)
+      if (elements.length === 0) {
+        await elementCacheService.refresh()
+        elements = elementCacheService.getElementsForSymbol(relPath, symbolName)
+      }
+      return elements
+    }
     const activeEditor = vscode.window.activeTextEditor
     const isActiveTarget = !!activeEditor && activeEditor.document.uri.toString() === targetUri.toString()
     if (!isActiveTarget) {
       return pickElement(
-        elementCacheService.getElementsForFile(relPath),
+        await elementsForFile(),
         `Select an element from ${relPath}`,
       )
     }
@@ -150,14 +203,14 @@ export function activate(context: vscode.ExtensionContext): void {
       : activeEditor.document.getText(selection).trim()
     if (selectedSymbol) {
       const element = await pickElement(
-        elementCacheService.getElementsForSymbol(relPath, selectedSymbol.name),
+        await elementsForSymbol(selectedSymbol.name),
         `Select an element for ${selectedSymbol.name}`,
       )
       if (element) return element
     }
     if (selectedText) {
       return pickElement(
-        elementCacheService.getElementsForSymbol(relPath, selectedText),
+        await elementsForSymbol(selectedText),
         `Select an element for ${selectedText}`,
       )
     }
@@ -193,6 +246,7 @@ export function activate(context: vscode.ExtensionContext): void {
     treeProvider.updateClient(ds)
     elementLibraryTreeProvider.updateClient(ds)
     elementCacheService.updateClient(ds)
+    webviewManager.setDataSource(ds)
   }
 
   // Watch services — created when entering local mode
@@ -204,12 +258,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const initWatch = (ds: DataSource): void => {
     if (ds.mode !== 'local') return
     const localDs = ds as any
-    if (!localDs.baseUrl || !localDs._watchService) return
+    const activeWatchService = typeof localDs.getWatchService === 'function'
+      ? localDs.getWatchService() as WatchService | undefined
+      : undefined
+    if (!localDs.baseUrl || !activeWatchService) return
 
-    const baseUrl = localDs.baseUrl as string
-    const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
-
-    watchService = new WatchService(baseUrl, repoPath)
+    watchService = activeWatchService
     watchDiffProvider = new WatchDiffProvider(watchService)
     watchStatusBar = new WatchStatusBar(watchService)
 
@@ -236,6 +290,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let diffDocument: DiffDocument | undefined
 
   const initSync = (): void => {
+    if (!modeManager.isCloudEnabled()) return
     disposeSync()
 
     syncService = new SyncService((status) => {
@@ -277,6 +332,8 @@ export function activate(context: vscode.ExtensionContext): void {
       void elementCacheService.refresh()
     }
     logger.info('extension', 'Bootstrap complete', { mode: dataSource?.mode })
+  }).catch((e) => {
+    logger.warn('extension', 'Bootstrap failed', { error: String(e) })
   })
 
   // ── Commands ──────────────────────────────────────────────────────────────
@@ -285,7 +342,7 @@ export function activate(context: vscode.ExtensionContext): void {
     disposeWatch()
     updateAllProviders(ds)
     initWatch(ds)
-    initSync()
+    if (modeManager.isCloudEnabled()) initSync()
     treeProvider.refresh()
     elementLibraryTreeProvider.refresh()
     void elementCacheService.refresh()
@@ -293,6 +350,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('tldiagram.login', async () => {
+      if (!modeManager.isCloudEnabled()) {
+        vscode.window.showInformationMessage('tlDiagram cloud features are disabled. Enable "tlDiagram › Cloud: Enabled" to use login.')
+        return
+      }
       logger.info('extension', 'Command: login')
       try {
         let authDisposable: vscode.Disposable | undefined
@@ -328,6 +389,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.logout', async () => {
+      if (!modeManager.isCloudEnabled()) {
+        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
+        return
+      }
       logger.info('extension', 'Command: logout')
       await authManager.clearKey()
       dataSource = undefined
@@ -444,10 +509,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand('tldiagram.switchMode', async () => {
       logger.info('extension', 'Command: switchMode')
-      const modes = [
-        { label: '$(server) Cloud Mode', description: 'Connect to tlDiagram.com API', mode: 'cloud' as const },
+      const modes: Array<{ label: string; description: string; mode: 'cloud' | 'local' }> = [
         { label: '$(device-desktop) Local Mode', description: 'Use local tld CLI', mode: 'local' as const },
       ]
+      if (modeManager.isCloudEnabled()) {
+        modes.unshift({ label: '$(server) Cloud Mode', description: 'Connect to tlDiagram.com API', mode: 'cloud' as const })
+      }
       const selected = await vscode.window.showQuickPick(modes, {
         placeHolder: `Current: ${dataSource?.mode ?? 'none'}`,
       })
@@ -475,11 +542,34 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.startWatch', async () => {
       logger.info('extension', 'Command: startWatch')
       if (!watchService) {
+        if (dataSource?.mode === 'local') {
+          try {
+            const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
+            await dataSource.startWatch(root)
+            disposeWatch()
+            initWatch(dataSource)
+            treeProvider.refresh()
+            elementLibraryTreeProvider.refresh()
+            void elementCacheService.refresh()
+            vscode.window.showInformationMessage('tlDiagram watch started')
+          } catch (e) {
+            logger.error('extension', 'startWatch failed', { error: String(e) })
+            vscode.window.showErrorMessage(`Watch failed: ${e instanceof Error ? e.message : String(e)}`)
+          }
+          return
+        }
         vscode.window.showErrorMessage('Watch is only available in local mode.')
         return
       }
       try {
-        await watchService.start()
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
+        if (dataSource?.mode === 'local') {
+          await dataSource.startWatch(root)
+          disposeWatch()
+          initWatch(dataSource)
+        } else {
+          await watchService.start()
+        }
         vscode.window.showInformationMessage('tlDiagram watch started')
       } catch (e) {
         logger.error('extension', 'startWatch failed', { error: String(e) })
@@ -490,7 +580,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tldiagram.stopWatch', async () => {
       logger.info('extension', 'Command: stopWatch')
       if (!watchService) return
-      await watchService.stop()
+      if (dataSource?.mode === 'local') {
+        await dataSource.stopWatch()
+      } else {
+        await watchService.stop()
+      }
       vscode.window.showInformationMessage('tlDiagram watch stopped')
     }),
 
@@ -542,6 +636,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.exportToCloud', async () => {
+      if (!modeManager.isCloudEnabled()) {
+        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
+        return
+      }
       logger.info('extension', 'Command: exportToCloud')
       if (!syncService) {
         vscode.window.showErrorMessage('Sync is not available. Connect to cloud first.')
@@ -557,6 +655,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.importFromCloud', async () => {
+      if (!modeManager.isCloudEnabled()) {
+        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
+        return
+      }
       logger.info('extension', 'Command: importFromCloud')
       if (!syncService) {
         vscode.window.showErrorMessage('Sync is not available. Connect to cloud first.')
@@ -575,6 +677,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.showSyncStatus', async () => {
+      if (!modeManager.isCloudEnabled()) {
+        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
+        return
+      }
       logger.info('extension', 'Command: showSyncStatus')
       if (!syncService) return
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
@@ -586,11 +692,25 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.diffWithCloud', async () => {
+      if (!modeManager.isCloudEnabled()) {
+        vscode.window.showInformationMessage('tlDiagram cloud features are disabled.')
+        return
+      }
       logger.info('extension', 'Command: diffWithCloud')
       if (!diffDocument) return
       diffDocument.refresh()
       const uri = vscode.Uri.parse('tldiagram-diff://cloud')
       await vscode.window.showTextDocument(uri, { preview: true })
+    }),
+
+    vscode.commands.registerCommand('tldiagram.updateCli', async () => {
+      const tldPath = await cliManager.detect()
+      if (!tldPath) {
+        vscode.window.showInformationMessage('Automatic tld CLI download is disabled. Set "tlDiagram › Cli Path" or install tld on PATH.')
+        return
+      }
+      const version = await cliManager.getVersion()
+      vscode.window.showInformationMessage(`tlDiagram CLI: ${version ?? tldPath}`)
     }),
 
     vscode.commands.registerCommand('tldiagram.goToDiagram', async (args?: { elementId?: number; elementName?: string } | vscode.Uri) => {
@@ -654,24 +774,34 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'tlDiagram: Analyzing workspace...', cancellable: false },
         async () => {
+          const tldPath = await cliManager.detect()
+          if (!tldPath) {
+            vscode.window.showErrorMessage('The "tld" CLI was not found. Set "tlDiagram › Cli Path" or install tld on PATH.')
+            return
+          }
+
           try {
-            await execLogged('tld --version')
+            await execFileLogged(tldPath, ['--version'])
           } catch {
-            vscode.window.showErrorMessage('The "tld" CLI was not found on your PATH. Please install standard tld release to use this feature.')
+            vscode.window.showErrorMessage('The configured "tld" CLI could not be executed.')
             return
           }
 
           try {
             try {
-              await execLogged('tld init', { cwd: targetPath })
+              await execFileLogged(tldPath, ['init'], { cwd: targetPath })
             } catch (initErr: any) {
               if (!initErr.message?.includes('already exists')) {
                 throw new Error(`Init failed: ${initErr.message}`)
               }
             }
-            await execLogged('tld analyze .', { cwd: targetPath })
-            await execLogged('tld apply --force', { cwd: targetPath })
-            vscode.window.showInformationMessage('Successfully analyzed and synced code models!')
+            await execFileLogged(tldPath, ['analyze', '.'], { cwd: targetPath })
+            if (modeManager.isCloudEnabled()) {
+              await execFileLogged(tldPath, ['apply', '--force'], { cwd: targetPath })
+            }
+            vscode.window.showInformationMessage(modeManager.isCloudEnabled()
+              ? 'Successfully analyzed and synced code models!'
+              : 'Successfully analyzed code models locally!')
             treeProvider.refresh()
             elementLibraryTreeProvider.refresh()
             void elementCacheService.refresh()

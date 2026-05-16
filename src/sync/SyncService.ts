@@ -3,11 +3,13 @@ import * as util from 'util'
 import * as vscode from 'vscode'
 import { logger } from '../logger'
 import type { DiffResult, SyncStatus } from '../datasource/DataSource'
+import { CLIManager } from '../cli/CLIManager'
 
-const execAsync = util.promisify(cp.exec)
+const execFileAsync = util.promisify(cp.execFile)
 
 export class SyncService {
   private watcher: vscode.FileSystemWatcher | undefined
+  private readonly cliManager = new CLIManager()
 
   constructor(
     private readonly onStatusChanged: (status: SyncStatus) => void,
@@ -41,18 +43,28 @@ export class SyncService {
     this.watcher = undefined
   }
 
+  private async getTldPath(): Promise<string> {
+    const tldPath = await this.cliManager.detect()
+    if (!tldPath) {
+      throw new Error('tld CLI not found. Set "tlDiagram › Cli Path" or install tld on PATH.')
+    }
+    return tldPath
+  }
+
   async exportToCloud(workspaceRoot: string): Promise<void> {
     logger.info('SyncService', 'Exporting to cloud')
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: 'Exporting workspace to cloud...', cancellable: false },
       async () => {
         try {
-          const { stderr } = await execAsync('tld apply --force', {
+          const tldPath = await this.getTldPath()
+          const { stderr } = await execFileAsync(tldPath, ['apply', '--force'], {
             cwd: workspaceRoot,
             timeout: 30000,
           })
-          if (stderr) {
-            logger.warn('SyncService', 'tld apply stderr', { stderr: stderr.slice(0, 500) })
+          const stderrText = String(stderr)
+          if (stderrText) {
+            logger.warn('SyncService', 'tld apply stderr', { stderr: stderrText.slice(0, 500) })
           }
           vscode.window.showInformationMessage('Workspace exported to cloud successfully.')
         } catch (e: any) {
@@ -69,12 +81,14 @@ export class SyncService {
       { location: vscode.ProgressLocation.Notification, title: 'Downloading from cloud...', cancellable: false },
       async () => {
         try {
-          const { stderr } = await execAsync('tld pull --force', {
+          const tldPath = await this.getTldPath()
+          const { stderr } = await execFileAsync(tldPath, ['pull', '--force'], {
             cwd: workspaceRoot,
             timeout: 30000,
           })
-          if (stderr) {
-            logger.warn('SyncService', 'tld pull stderr', { stderr: stderr.slice(0, 500) })
+          const stderrText = String(stderr)
+          if (stderrText) {
+            logger.warn('SyncService', 'tld pull stderr', { stderr: stderrText.slice(0, 500) })
           }
           vscode.window.showInformationMessage('Workspace downloaded from cloud successfully.')
         } catch (e: any) {
@@ -88,11 +102,12 @@ export class SyncService {
   async diffWithCloud(workspaceRoot: string): Promise<DiffResult> {
     logger.info('SyncService', 'Diffing with cloud')
     try {
-      const { stdout } = await execAsync('tld status --format json', {
+      const tldPath = await this.getTldPath()
+      const { stdout } = await execFileAsync(tldPath, ['status', '--format', 'json'], {
         cwd: workspaceRoot,
         timeout: 15000,
       })
-      const result = JSON.parse(stdout)
+      const result = JSON.parse(String(stdout))
       return {
         changed: result.changed ?? false,
         scan: result.scan ?? {},
@@ -108,11 +123,12 @@ export class SyncService {
   async getSyncStatus(workspaceRoot?: string): Promise<SyncStatus> {
     try {
       const root = workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '.'
-      const { stdout } = await execAsync('tld status --format json', {
+      const tldPath = await this.getTldPath()
+      const { stdout } = await execFileAsync(tldPath, ['status', '--format', 'json'], {
         cwd: root,
         timeout: 10000,
       })
-      const result = JSON.parse(stdout)
+      const result = JSON.parse(String(stdout))
       return {
         localChanges: result.local_changes ?? result.localChanges ?? 0,
         needsPush: result.needs_push ?? result.needsPush ?? false,
