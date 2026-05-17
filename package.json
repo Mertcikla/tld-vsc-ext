@@ -372,12 +372,14 @@
   },
   "scripts": {
     "compile:ext": "node esbuild.mjs",
+    "compile:e2e": "esbuild test/e2e/suite.ts --bundle --external:vscode --platform=node --format=cjs --outfile=out/e2e/suite.js",
     "compile:webview": "cd ../tld/frontend && npm run build:vscode",
     "compile": "npm run compile:ext && npm run compile:webview",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run compile && npx @vscode/vsce package",
     "vscode:prepublish": "npm run compile",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "npm run compile:ext && npm run compile:e2e && tsx test/e2e/run.ts"
   },
   "dependencies": {
     "@buf/tldiagramcom_diagram.bufbuild_es": "^2.12.0-20260510134954-1dd1981cf3f6.1",

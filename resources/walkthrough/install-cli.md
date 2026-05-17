@@ -4,9 +4,10 @@ The `tld` CLI powers all local diagram workflows inside VS Code.
 
 ```sh
 # macOS / Linux
-brew install Mertcikla/tap/tld
+curl -LsSf https://tldiagram.com/install.sh | sh
 
-# or download from GitHub Releases
+# Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://tldiagram.com/install.ps1 | iex"
 ```
 
 After installing, run the verify command to confirm everything is set up:

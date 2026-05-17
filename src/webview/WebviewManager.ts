@@ -12,6 +12,7 @@ export class WebviewManager {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private serverUrl: string = 'http://127.0.0.1:8060',
+    private readonly onPostMessage?: (diagramId: number, message: unknown) => void,
   ) {}
 
   setDataSource(dataSource: DataSource): void {
@@ -81,6 +82,7 @@ export class WebviewManager {
   }
 
   postMessageToDiagram(diagramId: number, message: any): void {
+    this.onPostMessage?.(diagramId, message)
     const panel = this.panels.get(diagramId)
     if (panel) {
       panel.webview.postMessage(message)

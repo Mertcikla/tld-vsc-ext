@@ -102,6 +102,15 @@ export function getWebviewHtml(
         root.style.setProperty(cssVar, value);
         root.style.setProperty(rgbVar, toRgb(value));
       };
+      [
+        'onboarding_shown',
+        'diagrameditor_tutorial_v1_core',
+        'viewgrid_tutorial_v2_core',
+        'dependencies_tutorial_v1_core',
+        'explore_tutorial_v1_core',
+        'explore_page_tutorial_v1_core',
+        'shared_zoom_onboarding_dismissed',
+      ].forEach((key) => localStorage.setItem(key, '1'));
       applyColor('diag:accent-color', '--accent', '--accent-rgb', colors.accent);
       applyColor('diag:background-color', '--bg-main', '--bg-main-rgb', colors.canvas);
       applyColor('diag:element-color', '--bg-element', '--bg-element-rgb', colors.element);

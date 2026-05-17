@@ -7,6 +7,9 @@ import { type DiagElementData } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ElementLibraryTreeProvider } from './tree/ElementLibraryTreeProvider'
 import { WebviewManager } from './webview/WebviewManager'
+import { openWorkspaceSourceLink, type SourceLinkMessage, WorkspaceSymbolService } from './webview/WorkspaceSymbolService'
+import { MessageRouter } from './webview/MessageRouter'
+import type { WebviewToExtensionMessage } from './webview/vscodeMessages'
 import type { DiagramTreeItem } from './tree/DiagramTreeItem'
 import type { ElementTreeItem } from './tree/ElementTreeItem'
 import { GitContextService } from './GitContextService'
@@ -82,9 +85,17 @@ export function activate(context: vscode.ExtensionContext): void {
   modeManager.refreshFeatureContexts()
 
   let dataSource: DataSource | undefined
+  let lastPostedWebviewMessage: { diagramId: number; message: unknown } | undefined
+  let bootstrapError: unknown
 
   const treeProvider = new DiagramTreeProvider(undefined as unknown as DataSource)
-  const webviewManager = new WebviewManager(context.extensionUri)
+  const webviewManager = new WebviewManager(
+    context.extensionUri,
+    undefined,
+    process.env.TLDIAGRAM_E2E === '1'
+      ? (diagramId, message) => { lastPostedWebviewMessage = { diagramId, message } }
+      : undefined,
+  )
   const gitService = new GitContextService()
   const elementCacheService = new ElementCacheService(undefined as unknown as DataSource, gitService)
 
@@ -270,7 +281,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   // Bootstrap: initialize mode
-  void modeManager.initialize().then((ds) => {
+  const bootstrapPromise = modeManager.initialize().then((ds) => {
     if (ds) {
       dataSource = ds
       updateAllProviders(ds)
@@ -282,6 +293,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     logger.info('extension', 'Bootstrap complete', { mode: dataSource?.mode })
   }).catch((e) => {
+    bootstrapError = e
     logger.warn('extension', 'Bootstrap failed', { error: String(e) })
   })
 
@@ -712,6 +724,26 @@ export function activate(context: vscode.ExtensionContext): void {
       )
     }),
   )
+
+  if (process.env.TLDIAGRAM_E2E === '1') {
+    context.subscriptions.push(
+      vscode.commands.registerCommand('tldiagram.test.waitForReady', async () => {
+        await bootstrapPromise
+        if (bootstrapError) throw bootstrapError
+        await elementCacheService.refresh()
+        return dataSource?.mode
+      }),
+      vscode.commands.registerCommand('tldiagram.test.openSourceFromWebview', async (msg: SourceLinkMessage) => {
+        return openWorkspaceSourceLink(msg)
+      }),
+      vscode.commands.registerCommand('tldiagram.test.dispatchWebviewMessage', async (msg: WebviewToExtensionMessage) => {
+        const router = new MessageRouter()
+        new WorkspaceSymbolService(() => {}, router)
+        await router.dispatch(msg)
+      }),
+      vscode.commands.registerCommand('tldiagram.test.getLastPostedWebviewMessage', () => lastPostedWebviewMessage),
+    )
+  }
 
   logger.info('extension', 'Activation complete')
 }

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tld CLI
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -LsSf https://tldiagram.com/install.sh | sh
+          for dir in "$HOME/.tld/bin" "$HOME/.local/bin" "$HOME/bin"; do
+            echo "$dir" >> "$GITHUB_PATH"
+            export PATH="$dir:$PATH"
+          done
+          tld --version
+
+      - name: Install tld CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy ByPass -c "irm https://tldiagram.com/install.ps1 | iex"
+          $paths = @(
+            "$env:USERPROFILE\.tld\bin",
+            "$env:LOCALAPPDATA\tldiagram\bin",
+            "$env:USERPROFILE\.local\bin"
+          )
+          foreach ($dir in $paths) {
+            Add-Content -Path $env:GITHUB_PATH -Value $dir
+          }
+          $env:Path = ($paths -join ';') + ';' + $env:Path
+          tld --version
+
+      - name: Build extension host
+        run: npm run compile:ext
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run VS Code extension e2e tests
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:e2e
+
+      - name: Run VS Code extension e2e tests
+        if: runner.os != 'Linux'
+        run: npm run test:e2e
