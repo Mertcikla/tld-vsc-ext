@@ -4,3 +4,9 @@ esbuild.mjs
 tsconfig.json
 *.map
 .vscode/
+out/webview/icons/._*
+out/webview/._*
+out/webview/.DS_Store
+AGENTS.md
+CLAUDE.md
+image.png
