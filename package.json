@@ -5,7 +5,7 @@
   "version": "0.1.4",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
-  "icon": "resources/logo-1024.png",
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -319,7 +319,7 @@
             "title": "Welcome to tlDiagram",
             "description": "tlDiagram keeps your architecture diagrams in sync with your codebase. Install the CLI to get started.",
             "media": {
-              "image": "resources/logo-1024.png",
+              "image": "resources/walkthrough/tld.svg",
               "altText": "tlDiagram logo"
             }
           },
