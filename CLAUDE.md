@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build the extension host only (TypeScript → out/extension.js via esbuild)
 npm run compile:ext
 
-# Build the webview bundle (delegates to frontend/npm run build:vscode)
+# Build the webview bundle (delegates to ../tld/frontend/npm run build:vscode)
 npm run compile:webview
 
 # Build both
@@ -33,7 +33,7 @@ Runs in Node.js inside VS Code. Entry point is `src/extension.ts` (`activate` / 
 
 **Auth & API**
 - **`src/auth/AuthManager.ts`** — stores/retrieves API keys via VS Code's `SecretStorage` (keychain-backed). Keys have the prefix `tld_`.
-- **`src/api/ExtensionApiClient.ts`** — ConnectRPC client wrapping `DiagramService`. Uses Bearer token auth. Imports protobuf-generated types directly from `../frontend/src/gen/` (no BSR package required); esbuild resolves the `@buf/…` aliases at build time via `esbuild.mjs`. Methods: `getMe`, `listDiagrams`, `createDiagram`, `renameDiagram`, `deleteDiagram`, `createObject`, `addObjectToDiagram`.
+- **`src/api/ExtensionApiClient.ts`** — ConnectRPC client wrapping `WorkspaceService`. Uses Bearer token auth. Imports protobuf-generated types through `@buf/tldiagramcom_diagram.bufbuild_es/...`; esbuild aliases those imports to `../tld/frontend/src/gen/` so the extension host bundle matches local proto output.
 
 **Tree views**
 - **`src/tree/DiagramTreeProvider.ts`** — `vscode.TreeDataProvider` for the Diagrams panel. Flat list fetched once; parent/child hierarchy resolved in memory via `parent_diagram_id`.
@@ -59,9 +59,9 @@ Runs in Node.js inside VS Code. Entry point is `src/extension.ts` (`activate` / 
 
 ### Webview (`out/webview/`)
 
-The React frontend (from `../frontend`) is built with a `vscode` Vite target (`frontend/vite.vscode.config.ts`) that swaps in VS Code-specific implementations via the `vscodeOverridesPlugin`. The result is served as local resources from `out/webview/assets/`.
+The React frontend (from `../tld/frontend`) is built with a `vscode` Vite target (`../tld/frontend/vite.vscode.config.ts`) that swaps in VS Code-specific implementations via the `vscodeOverridesPlugin`. The result is served as local resources from `out/webview/assets/`.
 
-**Active Vite overrides** (all in `frontend/vite.vscode.config.ts`):
+**Active Vite overrides** (all in `../tld/frontend/vite.vscode.config.ts`):
 
 | Original | VSCode override | Effect |
 |---|---|---|
@@ -76,9 +76,9 @@ The React frontend (from `../frontend`) is built with a `vscode` Vite target (`f
 | `components/ObjectLibrary.tsx` | `ObjectLibrary-vscode.tsx` | `null` render (native tree view) |
 | `components/DiagramExplorer.tsx` | `DiagramExplorer-vscode.tsx` | `null` render (native tree view) |
 
-**Bridge (`frontend/src/lib/vscodeBridge.ts`)**
+**Bridge (`../tld/frontend/src/lib/vscodeBridge.ts`)**
 
-Typed wrapper around `acquireVsCodeApi()`. Web builds get a no-op stub; the VSCode build gets the real implementation. Message types are defined in `frontend/src/types/vscode-messages.ts`.
+Typed wrapper around `acquireVsCodeApi()`. Web builds get a no-op stub; the VSCode build gets the real implementation. Message types are defined in `../tld/frontend/src/types/vscode-messages.ts`.
 
 ```
 WebviewToExtensionMessage:  ready | open-file | request-workspace-files
@@ -92,9 +92,9 @@ Request/response pairs use a `requestId` string for async matching over the one-
 
 ## Key relationships
 
-- The extension **shares protobuf generated types** with the frontend — `ExtensionApiClient` imports from `../frontend/src/gen/`. If proto definitions change, run `make proto` in `backend/` and rebuild.
+- The extension **shares protobuf generated types** with core UI — `esbuild.mjs` aliases `@buf/.../workspace_service_pb` to `../tld/frontend/src/gen/`. If proto definitions change, run `cd .. && make dev-proto` and rebuild.
 - `esbuild.mjs` aliases `@buf/tldiagramcom_diagram.bufbuild_es/…` to the local gen files so the extension host bundle is self-contained.
-- The extension also imports `frontend/src/types/vscode-messages.ts` and `frontend/src/types/index.ts` directly. These cross the `rootDir` boundary so `tsc --noEmit` reports `TS6059` errors on them — this is expected and pre-existing. esbuild resolves them correctly at build time.
+- The extension also imports `../tld/frontend/src/types/vscode-messages.ts` and `../tld/frontend/src/types/index.ts` directly. These cross the `rootDir` boundary so `tsc --noEmit` can report `TS6059` errors on them; esbuild resolves them correctly at build time.
 - The `tldiagram.authenticated` VS Code context key gates toolbar/context-menu items.
 - `vscode` is listed as `external` in esbuild — it is never bundled; the VS Code runtime provides it.
 

@@ -27,11 +27,10 @@ const options = {
   target: 'node18',
   sourcemap: true,
   alias: {
-    // Resolve @buf imports to local generated files so we don't need the BSR package installed
-    '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/auth_service_pb':
-      path.resolve(__dirname, '../frontend/src/gen/diag/v1/auth_service_pb.ts'),
-    '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/diagram_service_pb':
-      path.resolve(__dirname, '../frontend/src/gen/diag/v1/diagram_service_pb.ts'),
+    // Resolve @buf imports to local generated files so the extension host bundle
+    // matches the workspace-local proto overlay.
+    '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/workspace_service_pb':
+      path.resolve(__dirname, '../tld/frontend/src/gen/diag/v1/workspace_service_pb.ts'),
   },
 }
 
