@@ -13,6 +13,8 @@ import {
   ApplyPlanResponseSchema,
   ListElementsResponseSchema,
   ListElementPlacementsResponseSchema,
+  GetViewMarkdownResponseSchema,
+  SaveViewMarkdownResponseSchema,
   type PlanElement,
   type PlanConnector,
 } from '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/workspace_service_pb'
@@ -43,6 +45,12 @@ export interface DiagElementData {
   branch?: string | null
   language?: string | null
   file_path?: string | null
+}
+
+export interface ViewMarkdownDocument {
+  path: string
+  is_managed: boolean
+  updated_at: string
 }
 
 function j<T>(schema: Parameters<typeof toJson>[0], msg: Parameters<typeof toJson>[1]): T {
@@ -135,6 +143,46 @@ export class ExtensionApiClient {
     const res = await this.workspaceClient.listElementPlacements({ elementId })
     const json = j<{ placements: Array<{ view_id: number; view_name: string }> }>(ListElementPlacementsResponseSchema, res)
     return json.placements ?? []
+  }
+
+  async getViewMarkdown(viewId: number): Promise<{ markdown: ViewMarkdownDocument; content: string } | null> {
+    logger.debug('ExtensionApiClient', 'getViewMarkdown', { viewId })
+    const res = await this.workspaceClient.getViewMarkdown({ viewId })
+    const json = j<{
+      markdown?: {
+        path?: string
+        is_managed?: boolean
+        updated_at?: string
+      }
+      content?: string
+    }>(GetViewMarkdownResponseSchema, res)
+    if (!json.markdown?.path) return null
+    return {
+      markdown: {
+        path: json.markdown.path,
+        is_managed: Boolean(json.markdown.is_managed),
+        updated_at: json.markdown.updated_at ?? '',
+      },
+      content: String(json.content ?? ''),
+    }
+  }
+
+  async saveViewMarkdown(viewId: number, content: string): Promise<ViewMarkdownDocument> {
+    logger.debug('ExtensionApiClient', 'saveViewMarkdown', { viewId })
+    const res = await this.workspaceClient.saveViewMarkdown({ viewId, content })
+    const json = j<{
+      markdown?: {
+        path?: string
+        is_managed?: boolean
+        updated_at?: string
+      }
+    }>(SaveViewMarkdownResponseSchema, res)
+    if (!json.markdown?.path) throw new Error('View markdown save returned no markdown metadata')
+    return {
+      path: json.markdown.path,
+      is_managed: Boolean(json.markdown.is_managed),
+      updated_at: json.markdown.updated_at ?? '',
+    }
   }
 
   async createDiagram(name: string, parentDiagramId?: number): Promise<Diagram> {

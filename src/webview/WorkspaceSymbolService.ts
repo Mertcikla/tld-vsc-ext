@@ -10,6 +10,7 @@ export interface SourceLinkMessage {
   startLine?: number
   symbolName?: string
   symbolKind?: string
+  viewColumn?: 'active' | 'beside'
 }
 
 function flattenDocumentSymbols(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] {
@@ -134,6 +135,7 @@ export async function openWorkspaceSourceLink(msg: SourceLinkMessage): Promise<b
     startLine: msg.startLine,
     symbolName: msg.symbolName,
     symbolKind: msg.symbolKind,
+    viewColumn: msg.viewColumn,
   })
 
   if (!vscode.workspace.workspaceFolders?.length) {
@@ -156,6 +158,7 @@ export async function openWorkspaceSourceLink(msg: SourceLinkMessage): Promise<b
   const pos = new vscode.Position(Math.max(0, startLine ?? 0), 0)
   try {
     await vscode.window.showTextDocument(fileUri, {
+      viewColumn: msg.viewColumn === 'beside' ? vscode.ViewColumn.Beside : undefined,
       selection: new vscode.Range(pos, pos),
       preserveFocus: false,
     })

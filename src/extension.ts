@@ -7,6 +7,7 @@ import { type DiagElementData } from './api/ExtensionApiClient'
 import { DiagramTreeProvider } from './tree/DiagramTreeProvider'
 import { ElementLibraryTreeProvider } from './tree/ElementLibraryTreeProvider'
 import { WebviewManager } from './webview/WebviewManager'
+import { MarkdownDocumentService } from './webview/MarkdownDocumentService'
 import { openWorkspaceSourceLink, type SourceLinkMessage, WorkspaceSymbolService } from './webview/WorkspaceSymbolService'
 import { MessageRouter } from './webview/MessageRouter'
 import type { WebviewToExtensionMessage } from './webview/vscodeMessages'
@@ -87,6 +88,10 @@ export function activate(context: vscode.ExtensionContext): void {
   let dataSource: DataSource | undefined
   let lastPostedWebviewMessage: { diagramId: number; message: unknown } | undefined
   let bootstrapError: unknown
+  const markdownDocumentService = new MarkdownDocumentService()
+  context.subscriptions.push(vscode.workspace.registerFileSystemProvider('tldiagram-markdown', markdownDocumentService, {
+    isCaseSensitive: true,
+  }))
 
   const treeProvider = new DiagramTreeProvider(undefined as unknown as DataSource)
   const webviewManager = new WebviewManager(
@@ -95,6 +100,7 @@ export function activate(context: vscode.ExtensionContext): void {
     process.env.TLDIAGRAM_E2E === '1'
       ? (diagramId, message) => { lastPostedWebviewMessage = { diagramId, message } }
       : undefined,
+    markdownDocumentService,
   )
   const gitService = new GitContextService()
   const elementCacheService = new ElementCacheService(undefined as unknown as DataSource, gitService)

@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode'
-import type { Diagram, DiagElementData } from '../api/ExtensionApiClient'
+import type { Diagram, DiagElementData, ViewMarkdownDocument } from '../api/ExtensionApiClient'
 
 export interface WatchEvent {
   type: string
@@ -40,6 +40,8 @@ export interface DataSource {
   }): Promise<{ id: number }>
   addElementToDiagram(diagramId: number, objectId: number, x: number, y: number): Promise<void>
   listElementPlacements(elementId: number): Promise<{ view_id: number; view_name: string }[]>
+  getViewMarkdown(viewId: number): Promise<{ markdown: ViewMarkdownDocument; content: string } | null>
+  saveViewMarkdown(viewId: number, content: string): Promise<ViewMarkdownDocument>
 
   isWatchAvailable(): boolean
   startWatch(path: string): Promise<void>

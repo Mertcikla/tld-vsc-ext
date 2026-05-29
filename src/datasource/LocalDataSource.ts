@@ -222,6 +222,14 @@ export class LocalDataSource implements DataSource {
     return this.withReconnect((client) => client.listElementPlacements(elementId))
   }
 
+  getViewMarkdown(viewId: number) {
+    return this.withReconnect((client) => client.getViewMarkdown(viewId))
+  }
+
+  saveViewMarkdown(viewId: number, content: string) {
+    return this.withReconnect((client) => client.saveViewMarkdown(viewId, content))
+  }
+
   isWatchAvailable(): boolean {
     return true
   }

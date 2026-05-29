@@ -5,6 +5,7 @@ import type { DataSource } from '../datasource/DataSource'
 import { getWebviewHtml } from './getWebviewHtml'
 import { MessageRouter } from './MessageRouter'
 import { WorkspaceSymbolService } from './WorkspaceSymbolService'
+import { MarkdownDocumentService } from './MarkdownDocumentService'
 
 export class WebviewManager {
   private panels = new Map<number, vscode.WebviewPanel>()
@@ -13,10 +14,12 @@ export class WebviewManager {
     private readonly extensionUri: vscode.Uri,
     private serverUrl: string = 'http://127.0.0.1:8060',
     private readonly onPostMessage?: (diagramId: number, message: unknown) => void,
+    private readonly markdownDocumentService?: MarkdownDocumentService,
   ) {}
 
   setDataSource(dataSource: DataSource): void {
     this.serverUrl = (dataSource as any).baseUrl || this.serverUrl
+    this.markdownDocumentService?.updateDataSource(dataSource)
   }
 
   async openDiagram(item: DiagramTreeItem): Promise<void> {
@@ -58,6 +61,7 @@ export class WebviewManager {
     }
 
     new WorkspaceSymbolService(postMessage, router)
+    this.markdownDocumentService?.registerRouter(router)
 
     router.register('diagram-loaded', (msg) => {
       if (msg.type !== 'diagram-loaded') return
@@ -75,8 +79,22 @@ export class WebviewManager {
     })
 
     this.panels.set(diagram.id, panel)
+    const markdownSaveSubscription = this.markdownDocumentService?.onDidSaveMarkdown((event) => {
+      if (event.viewId !== diagram.id) return
+      postMessage({
+        type: 'markdown-saved',
+        viewId: event.viewId,
+        markdown: {
+          path: event.path,
+          is_managed: event.isManaged,
+          updated_at: event.updatedAt,
+        },
+        content: event.content,
+      })
+    })
     panel.onDidDispose(() => {
       logger.info('WebviewManager', 'Panel disposed', { diagramId: diagram.id })
+      markdownSaveSubscription?.dispose()
       this.panels.delete(diagram.id)
     })
   }

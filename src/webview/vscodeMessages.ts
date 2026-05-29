@@ -13,6 +13,14 @@ export type WebviewToExtensionMessage =
       startLine?: number
       symbolName?: string
       symbolKind?: string
+      viewColumn?: 'active' | 'beside'
+    }
+  | {
+      type: 'open-markdown'
+      viewId: number
+      path: string
+      content?: string
+      viewColumn?: 'active' | 'beside'
     }
   | { type: 'request-workspace-files'; requestId: string; pattern: string }
   | { type: 'request-symbol-list-for-file'; requestId: string; filePath: string }
