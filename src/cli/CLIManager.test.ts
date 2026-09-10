@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'events'
+import * as os from 'os'
+import * as path from 'path'
 
 function mockVSCode(cliPath: string): void {
   vi.doMock('vscode', () => ({
@@ -63,5 +65,19 @@ describe('CLIManager', () => {
     const manager = new CLIManager()
 
     await expect(manager.detect()).resolves.toBeNull()
+  })
+
+  it('falls back to default install locations when PATH lookup fails', async () => {
+    const expected = process.platform === 'win32'
+      ? path.join(os.homedir(), '.tld', 'bin', 'tld.exe')
+      : '/usr/local/bin/tld'
+    mockVSCode('')
+    vi.doMock('fs', () => ({ existsSync: vi.fn((p: string) => p === expected) }))
+    mockSpawn('', 1)
+
+    const { CLIManager } = await import('./CLIManager')
+    const manager = new CLIManager()
+
+    await expect(manager.detect()).resolves.toBe(expected)
   })
 })
