@@ -21,6 +21,7 @@ import type { DataSource } from './datasource/DataSource'
 import { WatchService } from './watch/WatchService'
 import { WatchDiffProvider } from './watch/WatchDiffProvider'
 import { WatchStatusBar } from './watch/WatchStatusBar'
+import { LspStatusNotifier } from './watch/LspStatusNotifier'
 import { WorkspaceSymbolProvider } from './provider/WorkspaceSymbolProvider'
 import { CLIManager } from './cli/CLIManager'
 
@@ -255,6 +256,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let watchService: WatchService | undefined
   let watchDiffProvider: WatchDiffProvider | undefined
   let watchStatusBar: WatchStatusBar | undefined
+  let lspStatusNotifier: LspStatusNotifier | undefined
   let watchDiffView: vscode.TreeView<unknown> | undefined
 
   const initWatch = (ds: DataSource): void => {
@@ -268,6 +270,7 @@ export function activate(context: vscode.ExtensionContext): void {
     watchService = activeWatchService
     watchDiffProvider = new WatchDiffProvider(watchService)
     watchStatusBar = new WatchStatusBar(watchService)
+    lspStatusNotifier = new LspStatusNotifier(watchService)
 
     watchDiffView = vscode.window.createTreeView('tldiagram.watchDiff', {
       treeDataProvider: watchDiffProvider,
@@ -279,6 +282,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const disposeWatch = (): void => {
     watchStatusBar?.dispose()
     watchStatusBar = undefined
+    lspStatusNotifier?.dispose()
+    lspStatusNotifier = undefined
     watchDiffView?.dispose()
     watchDiffView = undefined
     watchDiffProvider = undefined
