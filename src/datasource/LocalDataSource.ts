@@ -61,6 +61,8 @@ export class LocalDataSource implements DataSource {
   private port: number = 0
   private watchService: WatchService | null = null
   private reconnectPromise: Promise<void> | null = null
+  private stopping = false
+  private spawnGeneration = 0
 
   constructor(
     private readonly tldPath: string,
@@ -70,6 +72,8 @@ export class LocalDataSource implements DataSource {
   ) {}
 
   async connect(): Promise<void> {
+    this.stopping = false
+    const generation = ++this.spawnGeneration
     const port = this.configuredPort > 0 ? this.configuredPort : await getFreePort()
     logger.info('LocalDataSource', 'Starting tld watch', {
       tldPath: this.tldPath,
@@ -84,23 +88,35 @@ export class LocalDataSource implements DataSource {
       '--host', this.host,
       '--port', String(port),
     ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // stdin must be a pipe, not 'ignore': 'ignore' attaches /dev/null (NUL on
+      // Windows), which is a character device and makes the CLI treat stdin as
+      // interactive, so its LSP confirmation prompt reads EOF and aborts watch.
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
       cwd: this.workspaceRoot,
     })
 
     let stderr = ''
     this.watchProcess.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString()
-      logger.trace('LocalDataSource', 'tld watch stderr', { line: d.toString().trim() })
+      const chunk = d.toString()
+      stderr = (stderr + chunk).slice(-8000)
+      logger.debug('LocalDataSource', 'tld watch stderr', { line: chunk.trim() })
     })
     this.watchProcess.stdout?.on('data', (d: Buffer) => {
       logger.trace('LocalDataSource', 'tld watch stdout', { line: d.toString().trim() })
     })
 
-    this.watchProcess.on('exit', (code) => {
-      logger.info('LocalDataSource', 'tld watch exited', { code })
+    this.watchProcess.on('exit', (code, signal) => {
+      logger.info('LocalDataSource', 'tld watch exited', { code, signal })
+      if (generation !== this.spawnGeneration) return
       this.watchProcess = null
+      if (this.stopping || code === 0) return
+      const tail = stderr.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-10).join('\n')
+      logger.error('LocalDataSource', 'tld watch exited unexpectedly', { code, signal, stderr: tail })
+      const summary = tail.split('\n').slice(-1)[0] ?? ''
+      void vscode.window.showErrorMessage(
+        `tlDiagram: the tld CLI stopped unexpectedly (exit ${code ?? signal}).${summary ? ` ${summary}` : ''} See the "tlDiagram" output channel for details.`,
+      )
     })
 
     const baseUrl = `http://${this.host}:${port}`
@@ -123,6 +139,7 @@ export class LocalDataSource implements DataSource {
   }
 
   disconnect(): void {
+    this.stopping = true
     void this.watchService?.stop()
     this.watchService = null
     this.killWatch()
@@ -170,6 +187,7 @@ export class LocalDataSource implements DataSource {
         }
         this.watchService = null
         this.client = null
+        this.stopping = true
         this.killWatch()
         await this.connect()
       })().finally(() => {
