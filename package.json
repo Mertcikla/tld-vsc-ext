@@ -2,7 +2,7 @@
   "name": "tldiagram",
   "displayName": "tlDiagram",
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
   "icon": "resources/icon.png",
@@ -40,8 +40,8 @@
           "name": "Diagrams"
         },
         {
-          "id": "tldiagram.elementLibrary",
-          "name": "Element Library"
+          "id": "tldiagram.elementInventory",
+          "name": "Element Inventory"
         },
         {
           "id": "tldiagram.watchDiff",
@@ -142,8 +142,8 @@
         "title": "tlDiagram: Show Diagrams View"
       },
       {
-        "command": "tldiagram.focusElementLibraryView",
-        "title": "tlDiagram: Show Element Library"
+        "command": "tldiagram.focusElementInventoryView",
+        "title": "tlDiagram: Show Element Inventory"
       },
       {
         "command": "tldiagram.configureColors",
@@ -157,7 +157,7 @@
           "when": "false"
         },
         {
-          "command": "tldiagram.focusElementLibraryView",
+          "command": "tldiagram.focusElementInventoryView",
           "when": "false"
         }
       ],
@@ -344,8 +344,8 @@
           },
           {
             "id": "tldiagram.sidebarViews",
-            "title": "Diagrams and Element Library",
-            "description": "Click the tlDiagram icon in the activity bar to browse diagrams and pick elements from the library.\n\n[Show Diagrams](command:tldiagram.focusDiagramsView) [Show Element Library](command:tldiagram.focusElementLibraryView)",
+            "title": "Diagrams and Element Inventory",
+            "description": "Click the tlDiagram icon in the activity bar to browse diagrams and pick elements from the inventory.\n\n[Show Diagrams](command:tldiagram.focusDiagramsView) [Show Element Inventory](command:tldiagram.focusElementInventoryView)",
             "media": {
               "markdown": "resources/walkthrough/sidebar.md"
             }
@@ -390,7 +390,7 @@
   "devDependencies": {
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/test-electron": "^2.5.2",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.0.0",
     "chalk": "^5.6.2",
     "cli-table3": "^0.6.5",

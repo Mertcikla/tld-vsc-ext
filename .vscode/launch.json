@@ -6,8 +6,23 @@
       "type": "extensionHost",
       "request": "launch",
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
-      "outFiles": ["${workspaceFolder}/out/**/*.js"],
-      "preLaunchTask": "${defaultBuildTask}"
+      "outFiles": ["${workspaceFolder}/out/extension.js"],
+      "sourceMaps": true,
+      "pauseForSourceMap": false,
+      "resolveSourceMapLocations": [
+        "${workspaceFolder}/**",
+        "!**/node_modules/**",
+        "!${workspaceFolder}/out/webview/**"
+      ],
+      "preLaunchTask": "Build Extension Host"
+    },
+    {
+      "name": "Run Extension (no debug)",
+      "type": "extensionHost",
+      "request": "launch",
+      "noDebug": true,
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "preLaunchTask": "Build Extension Host"
     }
   ]
 }

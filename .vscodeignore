@@ -1,9 +1,14 @@
 node_modules/
 src/
+test/
+.github/
 esbuild.mjs
 tsconfig.json
-*.map
+**/*.map
 .vscode/
+.vscode-test/
+out/e2e/
+out/run-arch-test.js
 out/webview/icons/._*
 out/webview/._*
 out/webview/.DS_Store

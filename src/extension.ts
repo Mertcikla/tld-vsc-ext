@@ -230,7 +230,7 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
   })
-  const elementLibraryView = vscode.window.createTreeView('tldiagram.elementLibrary', {
+  const elementLibraryView = vscode.window.createTreeView('tldiagram.elementInventory', {
     treeDataProvider: elementLibraryTreeProvider,
     showCollapseAll: false,
   })
@@ -567,7 +567,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('tldiagram.updateCli', async () => {
-      await vscode.commands.executeCommand('tldiagram.installCli')
+      const tldPath = await cliManager.detect()
+      if (!tldPath) {
+        vscode.window.showErrorMessage('The "tld" CLI was not found. Install it or configure its path first.')
+        return
+      }
+      try {
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Updating tlDiagram CLI' }, async () => {
+          const { stdout, stderr } = await execFileAsync(tldPath, ['version', 'update'], { timeout: 30 * 60 * 1000 })
+          logger.info('extension', `${stdout}\n${stderr}`.trim())
+        })
+        vscode.window.showInformationMessage('CLI update check finished. Restart running tld servers to use an installed update.')
+      } catch (error) {
+        vscode.window.showErrorMessage(`CLI update failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }),
 
     vscode.commands.registerCommand('tldiagram.verifyCli', async () => {
@@ -593,9 +606,9 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand('tldiagram.diagramTree.focus')
     }),
 
-    vscode.commands.registerCommand('tldiagram.focusElementLibraryView', async () => {
-      logger.info('extension', 'Command: focusElementLibraryView')
-      await vscode.commands.executeCommand('tldiagram.elementLibrary.focus')
+    vscode.commands.registerCommand('tldiagram.focusElementInventoryView', async () => {
+      logger.info('extension', 'Command: focusElementInventoryView')
+      await vscode.commands.executeCommand('tldiagram.elementInventory.focus')
     }),
 
     vscode.commands.registerCommand('tldiagram.configureColors', async () => {

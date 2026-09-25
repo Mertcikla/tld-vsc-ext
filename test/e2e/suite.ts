@@ -97,6 +97,7 @@ async function runCodeLensJumpTest(): Promise<void> {
   assert.ok(editor, 'expected sample editor to be active before checking CodeLens')
 
   const lens = await getAlphaJumpCodeLens(editor.document.uri)
+  assert.ok(lens.command, 'expected tlDiagram CodeLens to include a command')
   await vscode.commands.executeCommand(lens.command.command, ...(lens.command.arguments ?? []))
 
   const posted = await eventually<PostedWebviewMessage>('focus-element webview message', async () => {

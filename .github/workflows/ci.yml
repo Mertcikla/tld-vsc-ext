@@ -49,7 +49,7 @@ jobs:
           powershell -ExecutionPolicy ByPass -c "irm https://tldiagram.com/install.ps1 | iex"
           $paths = @(
             "$env:USERPROFILE\.tld\bin",
-            "$env:LOCALAPPDATA\tldiagram\bin",
+            "$env:LOCALAPPDATA\tld\bin",
             "$env:USERPROFILE\.local\bin"
           )
           foreach ($dir in $paths) {

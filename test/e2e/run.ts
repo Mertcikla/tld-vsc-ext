@@ -70,31 +70,9 @@ function createFixture(): { workspaceDir: string; env: NodeJS.ProcessEnv; tldPat
   }
 
   run(tldPath, ['init', workspaceDir], { env })
-  fs.writeFileSync(
-    path.join(workspaceDir, 'elements.yaml'),
-    [
-      'root_component:',
-      '  name: E2E Diagram Root',
-      '  kind: service',
-      '  has_view: true',
-      '  placements:',
-      '    - parent: root',
-      '      position_x: 0',
-      '      position_y: 0',
-      'alpha_jump:',
-      '  name: alphaJump',
-      '  kind: function',
-      '  language: typescript',
-      '  file_path: src/sample.ts',
-      '  symbol: alphaJump',
-      '  placements:',
-      '    - parent: root_component',
-      '      position_x: 100',
-      '      position_y: 100',
-      '',
-    ].join('\n'),
-  )
-  run(tldPath, ['apply', '--workspace', workspaceDir, '--target', 'local', '--force', '--data-dir', dataDir], { env })
+  // `tld apply` was removed; `tld analyze` materializes the source tree into
+  // .tld/*.yaml and seeds the local store that `tld watch` serves.
+  run(tldPath, ['analyze', '.'], { cwd: workspaceDir, env })
 
   fs.writeFileSync(
     path.join(vscodeDir, 'settings.json'),

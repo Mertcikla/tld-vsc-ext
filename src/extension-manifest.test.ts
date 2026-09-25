@@ -49,7 +49,7 @@ describe('extension walkthrough', () => {
     expect(commands).toContain('tldiagram.verifyCli')
     expect(commands).toContain('tldiagram.openDocs')
     expect(commands).toContain('tldiagram.focusDiagramsView')
-    expect(commands).toContain('tldiagram.focusElementLibraryView')
+    expect(commands).toContain('tldiagram.focusElementInventoryView')
     expect(commands).toContain('tldiagram.configureColors')
   })
 

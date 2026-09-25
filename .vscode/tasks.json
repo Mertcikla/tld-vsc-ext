@@ -12,7 +12,16 @@
       "presentation": {
         "reveal": "silent"
       },
-      "problemMatcher": "$esbuild-watch"
+      "problemMatcher": []
+    },
+    {
+      "label": "Build Webview",
+      "type": "shell",
+      "command": "npm run compile:webview",
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": []
     }
   ]
 }
