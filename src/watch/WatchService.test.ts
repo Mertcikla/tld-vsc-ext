@@ -1,4 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import * as os from 'os'
+import * as path from 'path'
 
 const rpc = vi.hoisted(() => ({
   repositories: {
@@ -17,8 +19,9 @@ vi.mock('@buf/tldiagramcom_diagram.bufbuild_es/codeindex/v1/codeindex_pb', () =>
 }))
 import { WatchService } from './WatchService'
 
-const repo = { id: 'repo', root: '/repo', latestSnapshotId: 'base' }
-const status = { running: false, repoRoot: '/repo', snapshotId: 'base', contentFingerprint: '', lastScanUnix: 0n }
+const repoRoot = path.join(os.tmpdir(), 'tld-watch-service-test-repo')
+const repo = { id: 'repo', root: repoRoot, latestSnapshotId: 'base' }
+const status = { running: false, repoRoot, snapshotId: 'base', contentFingerprint: '', lastScanUnix: 0n }
 let service: WatchService
 beforeEach(() => {
   vi.resetAllMocks()
@@ -28,7 +31,7 @@ beforeEach(() => {
   rpc.repositories.startWatch.mockResolvedValue({ ...status, running: true })
   rpc.repositories.stopWatch.mockResolvedValue(status)
   rpc.codeIndex.getLiveImpact.mockResolvedValue({})
-  service = new WatchService('http://localhost:1234', '/repo')
+  service = new WatchService('http://localhost:1234', repoRoot)
 })
 afterEach(() => { service.dispose(); vi.useRealTimers() })
 
@@ -42,7 +45,7 @@ describe('repository watch RPC lifecycle', () => {
   })
 
   it('starts the matching checkout, rather than the first repository', async () => {
-    rpc.repositories.listRepositories.mockResolvedValue({ repositories: [{ ...repo, id: 'other', root: '/other' }, repo] })
+    rpc.repositories.listRepositories.mockResolvedValue({ repositories: [{ ...repo, id: 'other', root: path.join(os.tmpdir(), 'tld-watch-service-test-other') }, repo] })
     await service.start()
     expect(rpc.repositories.startWatch).toHaveBeenCalledWith({ repositoryId: 'repo', materialize: true })
   })
@@ -60,7 +63,7 @@ describe('repository watch RPC lifecycle', () => {
       yield { event: { case: 'repository', value: repo } }
     })
     await service.start()
-    expect(rpc.repositories.addRepository).toHaveBeenCalledWith({ path: '/repo', materialize: true })
+    expect(rpc.repositories.addRepository).toHaveBeenCalledWith({ path: repoRoot, materialize: true })
     expect(rpc.repositories.startWatch).toHaveBeenCalledWith({ repositoryId: 'repo', materialize: true })
   })
 
