@@ -10,7 +10,7 @@ import { WebviewManager } from './webview/WebviewManager'
 import { MarkdownDocumentService } from './webview/MarkdownDocumentService'
 import { openWorkspaceSourceLink, type SourceLinkMessage, WorkspaceSymbolService } from './webview/WorkspaceSymbolService'
 import { MessageRouter } from './webview/MessageRouter'
-import type { WebviewToExtensionMessage } from './webview/vscodeMessages'
+import type { RepositoryChangeTarget, WebviewToExtensionMessage } from './webview/vscodeMessages'
 import type { DiagramTreeItem } from './tree/DiagramTreeItem'
 import type { ElementTreeItem } from './tree/ElementTreeItem'
 import { GitContextService } from './GitContextService'
@@ -257,6 +257,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let watchDiffProvider: WatchDiffProvider | undefined
   let watchStatusBar: WatchStatusBar | undefined
   let lspStatusNotifier: LspStatusNotifier | undefined
+  let watchSubscription: { dispose(): void } | undefined
   let watchDiffView: vscode.TreeView<unknown> | undefined
 
   const initWatch = (ds: DataSource): void => {
@@ -271,6 +272,13 @@ export function activate(context: vscode.ExtensionContext): void {
     watchDiffProvider = new WatchDiffProvider(watchService)
     watchStatusBar = new WatchStatusBar(watchService)
     lspStatusNotifier = new LspStatusNotifier(watchService)
+    watchDiffProvider.refresh()
+    watchSubscription = watchService.onEvent((event) => {
+      if (event.type === 'representation.updated') {
+        treeProvider.refresh()
+        elementLibraryTreeProvider.refresh()
+      }
+    })
 
     watchDiffView = vscode.window.createTreeView('tldiagram.watchDiff', {
       treeDataProvider: watchDiffProvider,
@@ -286,8 +294,10 @@ export function activate(context: vscode.ExtensionContext): void {
     lspStatusNotifier = undefined
     watchDiffView?.dispose()
     watchDiffView = undefined
+    watchDiffProvider?.dispose()
     watchDiffProvider = undefined
-    watchService?.dispose()
+    watchSubscription?.dispose()
+    watchSubscription = undefined
     watchService = undefined
   }
 
@@ -480,8 +490,6 @@ export function activate(context: vscode.ExtensionContext): void {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '.'
         if (dataSource?.mode === 'local') {
           await dataSource.startWatch(root)
-          disposeWatch()
-          initWatch(dataSource)
         } else {
           await watchService.start()
         }
@@ -503,6 +511,14 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showInformationMessage('tlDiagram watch stopped')
     }),
 
+    vscode.commands.registerCommand('tldiagram.openRepositoryChange', async (target: RepositoryChangeTarget) => {
+      if (!target || typeof target.repositoryId !== 'string' || typeof target.filePath !== 'string') return
+      try { await webviewManager.openRepositoryChange(target) } catch (error) {
+        logger.error('extension', 'Could not open repository change', { error: String(error) })
+        void vscode.window.showErrorMessage(`Could not open repository change: ${String(error)}`)
+      }
+    }),
+
     vscode.commands.registerCommand('tldiagram.showWatchDiff', () => {
       logger.info('extension', 'Command: showWatchDiff')
       if (watchDiffView) {
@@ -519,7 +535,6 @@ export function activate(context: vscode.ExtensionContext): void {
       const actions = []
 
       if (status.active) {
-        actions.push({ label: '$(debug-pause) Pause Watch', action: 'pause' as const })
         actions.push({ label: '$(circle-slash) Stop Watch', action: 'stop' as const })
       } else {
         actions.push({ label: '$(eye) Start Watch', action: 'start' as const })
@@ -543,9 +558,7 @@ export function activate(context: vscode.ExtensionContext): void {
           await vscode.commands.executeCommand('tldiagram.showWatchDiff')
           break
         case 'rescan':
-          await vscode.commands.executeCommand('tldiagram.startWatch')
-          break
-        case 'pause':
+          await vscode.commands.executeCommand('tldiagram.analyzeFolder')
           break
       }
     }),
@@ -728,15 +741,17 @@ export function activate(context: vscode.ExtensionContext): void {
           }
 
           try {
+            const resumeWatch = dataSource?.getWatchStatus()?.active
+            if (resumeWatch) await dataSource!.stopWatch()
             try {
-              await execFileLogged(tldPath, ['init'], { cwd: targetPath })
-            } catch (initErr: any) {
-              if (!initErr.message?.includes('already exists')) {
-                throw new Error(`Init failed: ${initErr.message}`)
+              await execFileLogged(tldPath, ['index', targetPath, '--map'], { cwd: targetPath, maxBuffer: 16 * 1024 * 1024 })
+            } finally {
+              if (resumeWatch) {
+                const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+                if (root) await dataSource!.startWatch(root)
               }
             }
-            await execFileLogged(tldPath, ['analyze', '.'], { cwd: targetPath })
-            vscode.window.showInformationMessage('Successfully analyzed code models locally!')
+            vscode.window.showInformationMessage('Successfully indexed code models locally!')
             treeProvider.refresh()
             elementLibraryTreeProvider.refresh()
             void elementCacheService.refresh()
@@ -766,6 +781,25 @@ export function activate(context: vscode.ExtensionContext): void {
         await router.dispatch(msg)
       }),
       vscode.commands.registerCommand('tldiagram.test.getLastPostedWebviewMessage', () => lastPostedWebviewMessage),
+      vscode.commands.registerCommand('tldiagram.test.getRepositoryChangeState', (repositoryId: string) => webviewManager.getRepositoryChangeState(repositoryId)),
+      vscode.commands.registerCommand('tldiagram.test.getWatchChangeCommand', async () => {
+        if (!watchDiffProvider || !watchService) return undefined
+        await watchDiffProvider.refresh()
+        for (const group of watchDiffProvider.getChildren()) {
+          for (const resource of watchDiffProvider.getChildren(group)) {
+            const item = watchDiffProvider.getChildren(resource).find((item) => item.command)
+            if (item) return item.command
+          }
+        }
+        return undefined
+      }),
+      vscode.commands.registerCommand('tldiagram.test.getDataSource', () => dataSource),
+      vscode.commands.registerCommand('tldiagram.test.getLocalState', async () => ({
+        baseUrl: (dataSource as { baseUrl?: string } | undefined)?.baseUrl,
+        status: dataSource?.getWatchStatus(),
+        diagrams: await dataSource?.listDiagrams(),
+        elements: await dataSource?.listElements(),
+      })),
     )
   }
 

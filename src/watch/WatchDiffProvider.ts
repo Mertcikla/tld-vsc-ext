@@ -1,12 +1,14 @@
 import * as vscode from 'vscode'
 import { logger } from '../logger'
 import type { WatchService } from './WatchService'
+import type { RepositoryChangeTarget } from '../webview/vscodeMessages'
 
 interface DiffItem {
   changeType: 'added' | 'modified' | 'removed'
   resourceType: string
   id: number
   name: string
+  target?: RepositoryChangeTarget
   details?: any
 }
 
@@ -15,10 +17,15 @@ class DiffTreeItem extends vscode.TreeItem {
     public readonly label: string,
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
     public readonly diffItem?: DiffItem,
+    public readonly changeGroup?: string,
+    public readonly resourceGroup?: string,
   ) {
     super(label, collapsibleState)
     if (diffItem) {
       this.description = diffItem.resourceType
+      if (diffItem.target) this.command = {
+        command: 'tldiagram.openRepositoryChange', title: 'Open Repository Change', arguments: [diffItem.target],
+      }
       if (diffItem.changeType === 'added') {
         this.iconPath = new vscode.ThemeIcon('diff-added')
         this.contextValue = 'watchDiffAdded'
@@ -37,11 +44,12 @@ export class WatchDiffProvider implements vscode.TreeDataProvider<DiffTreeItem> 
   private _onDidChangeTreeData = new vscode.EventEmitter<DiffTreeItem | undefined | null>()
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event
 
+  private readonly subscription: { dispose(): void }
   private diffs: DiffItem[] = []
   private groupedDiffs: Map<string, Map<string, DiffItem[]>> = new Map()
 
   constructor(private readonly watchService: WatchService) {
-    this.watchService.onEvent((event) => {
+    this.subscription = this.watchService.onEvent((event) => {
       if (event.type === 'representation.updated' && event.data?.diffs) {
         this.processDiffs(event.data.diffs)
       }
@@ -59,6 +67,7 @@ export class WatchDiffProvider implements vscode.TreeDataProvider<DiffTreeItem> 
         id: diff.id ?? 0,
         name: diff.name || `#${diff.id}`,
         details: diff,
+        target: diff.repositoryId && diff.filePath ? { repositoryId: diff.repositoryId, filePath: diff.filePath } : undefined,
       }
       this.diffs.push(item)
 
@@ -82,15 +91,20 @@ export class WatchDiffProvider implements vscode.TreeDataProvider<DiffTreeItem> 
     this._onDidChangeTreeData.fire(undefined)
   }
 
-  refresh(): void {
+  async refresh(): Promise<void> {
     logger.info('WatchDiffProvider', 'Manual refresh')
-    this.watchService.requestDiff().then((diffs) => {
+    await this.watchService.requestDiff().then((diffs) => {
       if (Array.isArray(diffs)) {
         this.processDiffs(diffs)
       }
     }).catch((e) => {
       logger.warn('WatchDiffProvider', 'Refresh failed', { error: String(e) })
     })
+  }
+
+  dispose(): void {
+    this.subscription.dispose()
+    this._onDidChangeTreeData.dispose()
   }
 
   getTreeItem(element: DiffTreeItem): vscode.TreeItem {
@@ -113,45 +127,25 @@ export class WatchDiffProvider implements vscode.TreeDataProvider<DiffTreeItem> 
             total += items.length
           }
           const label = `${changeType === 'added' ? '+' : changeType === 'removed' ? '-' : '~'} ${total} ${changeType}`
-          items.push(new DiffTreeItem(label, vscode.TreeItemCollapsibleState.Collapsed))
+          items.push(new DiffTreeItem(label, vscode.TreeItemCollapsibleState.Collapsed, undefined, changeType))
         }
       }
       return items
     }
 
-    if (element.label.startsWith('+ ') || element.label.startsWith('~ ') || element.label.startsWith('- ')) {
-      // Change type group: show resource types
-      const changeType = element.label.includes('added') ? 'added' : element.label.includes('modified') ? 'modified' : 'removed'
-      const byType = this.groupedDiffs.get(changeType)
-      if (!byType) return []
-
-      const items: DiffTreeItem[] = []
-      for (const [resourceType, diffs] of byType.entries()) {
-        items.push(new DiffTreeItem(
-          `${resourceType} (${diffs.length})`,
-          vscode.TreeItemCollapsibleState.Collapsed,
-        ))
-      }
-      return items
+    if (element.changeGroup && !element.resourceGroup) {
+      const byType = this.groupedDiffs.get(element.changeGroup)
+      return [...(byType ?? [])].map(([resourceType, diffs]) => new DiffTreeItem(
+        `${resourceType} (${diffs.length})`, vscode.TreeItemCollapsibleState.Collapsed,
+        undefined, element.changeGroup, resourceType,
+      ))
     }
 
-    if (element.label.includes('(')) {
-      // Resource type group: show individual diffs with resource type label
-      const resourceType = element.label.split(' (')[0]
-      // Find the matching diffs across all change types
-      const matchingDiffs: DiffItem[] = []
-      for (const byType of this.groupedDiffs.values()) {
-        const items = byType.get(resourceType)
-        if (items) {
-          for (const d of items) {
-            matchingDiffs.push(d)
-          }
-        }
-      }
-
-      return matchingDiffs.map((d) => {
-        const prefix = d.changeType === 'added' ? '+' : d.changeType === 'removed' ? '-' : '~'
-        return new DiffTreeItem(`${prefix} ${d.name}`, vscode.TreeItemCollapsibleState.None, d)
+    if (element.changeGroup && element.resourceGroup) {
+      const diffs = this.groupedDiffs.get(element.changeGroup)?.get(element.resourceGroup) ?? []
+      return diffs.map((diff) => {
+        const prefix = diff.changeType === 'added' ? '+' : diff.changeType === 'removed' ? '-' : '~'
+        return new DiffTreeItem(`${prefix} ${diff.name}`, vscode.TreeItemCollapsibleState.None, diff)
       })
     }
 

@@ -25,7 +25,7 @@ export interface DataSource {
   mode: 'local'
 
   connect(): Promise<void>
-  disconnect(): void
+  disconnect(): void | Promise<void>
 
   listDiagrams(): Promise<Diagram[]>
   createDiagram(name: string, parentDiagramId?: number): Promise<Diagram>

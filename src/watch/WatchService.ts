@@ -1,391 +1,150 @@
-import * as http from 'http'
-import * as crypto from 'crypto'
 import { EventEmitter } from 'events'
+import * as fs from 'fs'
+import * as path from 'path'
+import { createClient } from '@connectrpc/connect'
+import { createConnectTransport } from '@connectrpc/connect-web'
+import { CodeIndexService, RepositoryService, ChangeKind, type Repository, type WatchStatus as RepositoryWatchStatus } from '@buf/tldiagramcom_diagram.bufbuild_es/codeindex/v1/codeindex_pb'
 import { logger } from '../logger'
 import type { WatchEvent, WatchStatus } from '../datasource/DataSource'
 
-function generateWebSocketKey(): string {
-  return crypto.randomBytes(16).toString('base64')
+export interface WatchDiff {
+  repositoryId: string
+  filePath: string
+  change_type: 'added' | 'modified' | 'removed'
+  resource_type: string
+  name: string
 }
 
-function computeAcceptKey(key: string): string {
-  return crypto
-    .createHash('sha1')
-    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-    .digest('base64')
+function canonicalPath(value: string): string {
+  try { return fs.realpathSync(value) } catch { return path.resolve(value) }
 }
 
-class WebSocketConnection extends EventEmitter {
-  private socket: import('net').Socket | null = null
-  private buffer = Buffer.alloc(0)
-
-  connect(url: string): void {
-    const parsed = new URL(url)
-    const isSecure = parsed.protocol === 'wss:'
-    const port = parsed.port ? parseInt(parsed.port, 10) : (isSecure ? 443 : 80)
-    const hostname = parsed.hostname
-
-    const key = generateWebSocketKey()
-
-    const request = [
-      `GET ${parsed.pathname}${parsed.search || ''} HTTP/1.1`,
-      `Host: ${hostname}:${port}`,
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      `Sec-WebSocket-Key: ${key}`,
-      'Sec-WebSocket-Version: 13',
-      '',
-      '',
-    ].join('\r\n')
-
-    const socket = isSecure
-      ? (require('tls') as typeof import('tls')).connect({ port, host: hostname }, () => {
-        socket.write(request)
-      })
-      : (require('net') as typeof import('net')).connect(port, hostname, () => {
-        socket.write(request)
-      })
-
-    let headers = ''
-    socket.on('data', (data: Buffer) => {
-      if (!this.socket) {
-        headers += data.toString()
-        const headerEnd = headers.indexOf('\r\n\r\n')
-        if (headerEnd === -1) return
-
-        const headerPart = headers.substring(0, headerEnd)
-        const statusLine = headerPart.split('\r\n')[0]
-        if (!statusLine?.includes('101')) {
-          this.emit('error', new Error(`WebSocket upgrade failed: ${statusLine}`))
-          socket.destroy()
-          return
-        }
-
-        const acceptKey = computeAcceptKey(key)
-        const serverAccept = headerPart.match(/Sec-WebSocket-Accept:\s*(.+)/i)?.[1]?.trim()
-        if (serverAccept !== acceptKey) {
-          this.emit('error', new Error('WebSocket accept key mismatch'))
-          socket.destroy()
-          return
-        }
-
-        this.socket = socket
-        this.emit('open')
-
-        const remaining = data.subarray(headerEnd + 4)
-        if (remaining.length > 0) {
-          this.buffer = Buffer.concat([this.buffer, remaining])
-          this.processFrames()
-        }
-      } else {
-        this.buffer = Buffer.concat([this.buffer, data])
-        this.processFrames()
-      }
-    })
-
-    socket.on('error', (err: Error) => {
-      logger.warn('WatchService', 'WebSocket error', { error: err.message })
-      this.emit('error', err)
-    })
-
-    socket.on('close', () => {
-      this.socket = null
-      this.emit('close')
-    })
-  }
-
-  private processFrames(): void {
-    while (this.buffer.length >= 2) {
-      const firstByte = this.buffer[0]
-      const secondByte = this.buffer[1]
-      const opcode = firstByte & 0x0f
-      const masked = (secondByte & 0x80) !== 0
-      let payloadLen = secondByte & 0x7f
-      let offset = 2
-
-      if (payloadLen === 126) {
-        if (this.buffer.length < 4) return
-        payloadLen = this.buffer.readUInt16BE(2)
-        offset = 4
-      } else if (payloadLen === 127) {
-        if (this.buffer.length < 10) return
-        const hi = this.buffer.readUInt32BE(2)
-        const lo = this.buffer.readUInt32BE(6)
-        payloadLen = hi * 0x100000000 + lo
-        offset = 10
-      }
-
-      const maskOffset = offset
-      if (masked) offset += 4
-
-      if (this.buffer.length < offset + payloadLen) return
-
-      let payload: Buffer
-      if (masked && this.buffer.length >= offset + payloadLen) {
-        const mask = [this.buffer[maskOffset], this.buffer[maskOffset + 1], this.buffer[maskOffset + 2], this.buffer[maskOffset + 3]]
-        payload = Buffer.alloc(payloadLen)
-        for (let i = 0; i < payloadLen; i++) {
-          payload[i] = this.buffer[offset + i] ^ mask[i % 4]
-        }
-      } else {
-        payload = this.buffer.subarray(offset, offset + payloadLen)
-      }
-
-      this.buffer = this.buffer.subarray(offset + payloadLen)
-
-      switch (opcode) {
-        case 0x1:
-          this.emit('message', payload.toString('utf-8'))
-          break
-        case 0x8: {
-          const code = payloadLen >= 2 ? payload.readUInt16BE(0) : 1000
-          const reason = payloadLen > 2 ? payload.subarray(2).toString('utf-8') : ''
-          logger.debug('WatchService', 'WebSocket close frame', { code, reason })
-          this.close(1000)
-          break
-        }
-        case 0x9:
-          this.sendFrame(0xa, payload, true)
-          break
-        case 0x2:
-          break
-      }
-    }
-  }
-
-  send(text: string): void {
-    const payload = Buffer.from(text, 'utf-8')
-    this.sendFrame(0x1, payload)
-  }
-
-  private sendFrame(opcode: number, payload: Buffer, isPong = false): void {
-    if (!this.socket) return
-    const fin = 0x80 | opcode
-    const mask = crypto.randomBytes(4)
-    let frame: Buffer
-    if (payload.length < 126) {
-      frame = Buffer.alloc(2 + 4 + payload.length)
-      frame[0] = fin
-      frame[1] = 0x80 | payload.length
-      mask.copy(frame, 2)
-      for (let i = 0; i < payload.length; i++) {
-        frame[6 + i] = payload[i] ^ mask[i % 4]
-      }
-    } else if (payload.length < 65536) {
-      frame = Buffer.alloc(4 + 4 + payload.length)
-      frame[0] = fin
-      frame[1] = 0x80 | 126
-      frame.writeUInt16BE(payload.length, 2)
-      mask.copy(frame, 4)
-      for (let i = 0; i < payload.length; i++) {
-        frame[8 + i] = payload[i] ^ mask[i % 4]
-      }
-    } else {
-      frame = Buffer.alloc(10 + 4 + payload.length)
-      frame[0] = fin
-      frame[1] = 0x80 | 127
-      frame.writeUInt32BE(Math.floor(payload.length / 0x100000000), 2)
-      frame.writeUInt32BE(payload.length % 0x100000000, 6)
-      mask.copy(frame, 10)
-      for (let i = 0; i < payload.length; i++) {
-        frame[14 + i] = payload[i] ^ mask[i % 4]
-      }
-    }
-    this.socket.write(frame)
-  }
-
-  close(code = 1000): void {
-    if (!this.socket) return
-    const buf = Buffer.alloc(2)
-    buf.writeUInt16BE(code, 0)
-    this.sendFrame(0x8, buf)
-    this.socket.end()
-    this.socket = null
-  }
-}
-
+/** v2.4.3 exposes repository watch state over ConnectRPC, not /api/watch/ws. */
 export class WatchService {
-  private ws: WebSocketConnection | null = null
-  private events = new EventEmitter()
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private reconnectDelay = 1000
-  private maxReconnectDelay = 30000
-  private shouldReconnect = false
+  private readonly repositories
+  private readonly codeIndex
+  private readonly events = new EventEmitter()
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private controller: AbortController | undefined
   private currentStatus: WatchStatus = { active: false }
+  private lastError = ''
+  private fingerprint: string | undefined
+  private repoPath: string
 
-  constructor(
-    private readonly baseUrl: string,
-    private readonly repoPath: string,
-  ) {}
+  constructor(baseUrl: string, repoPath: string) {
+    this.repoPath = canonicalPath(repoPath)
+    const transport = createConnectTransport({ baseUrl: `${baseUrl}/api` })
+    this.repositories = createClient(RepositoryService, transport)
+    this.codeIndex = createClient(CodeIndexService, transport)
+  }
 
-  async start(): Promise<void> {
-    logger.info('WatchService', 'Starting watch')
-    this.shouldReconnect = true
-    if (!this.ws) {
-      await this.connectWebSocket()
-    }
+  async initialize(): Promise<void> {
+    this.dispose()
+    this.controller = new AbortController()
     await this.requestStatus()
-    this.currentStatus = { active: true }
+    this.schedulePoll()
+  }
+
+  private emit(type: string, data?: unknown, message?: string): void {
+    this.events.emit('event', { type, data, message, at: new Date().toISOString() } satisfies WatchEvent)
+  }
+
+  private async repository(): Promise<Repository | undefined> {
+    const { repositories } = await this.repositories.listRepositories({}, { signal: this.controller?.signal })
+    // A VS Code workspace can be a subdirectory of a registered checkout.
+    return repositories.filter((repo) => {
+      const root = canonicalPath(repo.root)
+      return root === this.repoPath || this.repoPath.startsWith(root + path.sep)
+    }).sort((a, b) => b.root.length - a.root.length)[0]
+  }
+
+  async start(repoPath = this.repoPath): Promise<void> {
+    this.repoPath = canonicalPath(repoPath)
+    let repo = await this.repository()
+    if (!repo) {
+      for await (const event of this.repositories.addRepository({ path: this.repoPath, materialize: true })) {
+        if (event.event.case === 'repository') repo = event.event.value
+      }
+    }
+    if (!repo) throw new Error('Indexing did not register the repository')
+    const status = await this.repositories.getWatchStatus({ id: repo.id })
+    if (!status.running) {
+      this.updateStatus(await this.repositories.startWatch({ repositoryId: repo.id, materialize: true }))
+    } else {
+      this.updateStatus(status)
+    }
+    this.fingerprint = undefined
+    await this.requestStatus()
   }
 
   async stop(): Promise<void> {
-    logger.info('WatchService', 'Stopping watch')
-    this.shouldReconnect = false
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-    if (this.ws) {
-      try {
-        this.ws.send(JSON.stringify({ type: 'watch.stop' }))
-      } catch (e) {
-        logger.warn('WatchService', 'Failed to send watch.stop', { error: String(e) })
-      }
-      this.ws.close()
-    }
-    this.currentStatus = { active: false }
+    const repo = await this.repository()
+    if (repo) this.updateStatus(await this.repositories.stopWatch({ id: repo.id }))
+    else this.updateStatus(undefined)
   }
 
-  getStatus(): WatchStatus {
-    return this.currentStatus
-  }
+  getStatus(): WatchStatus { return this.currentStatus }
 
   onEvent(listener: (event: WatchEvent) => void): { dispose: () => void } {
     this.events.on('event', listener)
     return { dispose: () => { this.events.off('event', listener) } }
   }
 
+  private updateStatus(status: RepositoryWatchStatus | undefined): void {
+    const active = status?.running ?? false
+    const changed = active !== this.currentStatus.active
+    this.currentStatus = { active, repository: status?.repoRoot }
+    const error = active ? status?.error ?? '' : ''
+    if (changed || (this.lastError && !error)) this.emit(active ? 'watch.started' : 'watch.stopped')
+    if (error && error !== this.lastError) this.emit('watch.error', undefined, error)
+    this.lastError = error
+  }
+
   async requestStatus(): Promise<WatchStatus> {
-    try {
-      const status = await this.httpGet('/api/watch/status')
-      this.currentStatus = status
-      return status
-    } catch {
+    const repo = await this.repository()
+    if (!repo) {
+      this.updateStatus(undefined)
       return this.currentStatus
     }
-  }
-
-  async requestDiff(): Promise<any> {
-    try {
-      const repos = await this.httpGet('/api/watch/repositories')
-      if (Array.isArray(repos) && repos.length > 0) {
-        const repoId = repos[0].id
-        const versions = await this.httpGet(`/api/watch/repositories/${repoId}/versions`)
-        if (Array.isArray(versions) && versions.length > 0) {
-          const latestVersionId = versions[versions.length - 1].id
-          return this.httpGet(`/api/watch/versions/${latestVersionId}/diffs`)
-        }
-      }
-    } catch (e) {
-      logger.warn('WatchService', 'requestDiff failed', { error: String(e) })
+    const status = await this.repositories.getWatchStatus({ id: repo.id }, { signal: this.controller?.signal })
+    this.updateStatus(status)
+    const fingerprint = [repo.id, repo.latestSnapshotId, status.snapshotId, status.contentFingerprint, status.lastScanUnix].join(':')
+    if (fingerprint !== this.fingerprint) {
+      // Fetch before recording the fingerprint so a transient failure is retried.
+      const diffs = await this.requestDiff(repo.id)
+      this.fingerprint = fingerprint
+      this.emit('representation.updated', { diffs })
     }
-    return []
+    return this.currentStatus
   }
 
-  private async connectWebSocket(): Promise<void> {
-    const wsUrl = this.baseUrl.replace('http://', 'ws://') + '/api/watch/ws'
-    logger.info('WatchService', 'Connecting WebSocket', { url: wsUrl })
-
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocketConnection()
-      let resolved = false
-
-      ws.on('open', () => {
-        logger.info('WatchService', 'WebSocket connected')
-        this.ws = ws
-        resolved = true
-        resolve()
-      })
-
-      ws.on('message', (data: string) => {
-        try {
-          const event: WatchEvent = JSON.parse(data)
-          logger.trace('WatchService', 'WS event', { type: event.type })
-          this.events.emit('event', event)
-        } catch {
-          logger.warn('WatchService', 'Failed to parse WS message', { data: data.slice(0, 200) })
-        }
-      })
-
-      ws.on('error', (err: Error) => {
-        logger.warn('WatchService', 'WebSocket error', { error: err.message })
-        if (!resolved) {
-          resolved = true
-          reject(err)
-        }
-      })
-
-      ws.on('close', () => {
-        logger.info('WatchService', 'WebSocket closed')
-        this.ws = null
-        if (this.shouldReconnect) {
-          this.scheduleReconnect()
-        }
-      })
-
-      ws.connect(wsUrl)
+  async requestDiff(repositoryId?: string): Promise<WatchDiff[]> {
+    const id = repositoryId ?? (await this.repository())?.id
+    if (!id) return []
+    const impact = await this.codeIndex.getLiveImpact({ id }, { signal: this.controller?.signal })
+    return (impact.scene?.files ?? []).flatMap((file): WatchDiff[] => {
+      const change = file.change === ChangeKind.ADDED ? 'added'
+        : file.change === ChangeKind.REMOVED ? 'removed'
+        : file.change === ChangeKind.MODIFIED ? 'modified' : undefined
+      return change ? [{ repositoryId: id, filePath: file.path, change_type: change, resource_type: 'file', name: file.path }] : []
     })
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer) return
-    logger.info('WatchService', 'Scheduling reconnect', { delay: this.reconnectDelay })
-    this.reconnectTimer = setTimeout(async () => {
-      this.reconnectTimer = null
-      try {
-        await this.connectWebSocket()
-        this.reconnectDelay = 1000
-      } catch {
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay)
-        this.scheduleReconnect()
-      }
-    }, this.reconnectDelay)
+  private schedulePoll(controller = this.controller): void {
+    if (!controller || controller.signal.aborted || controller !== this.controller) return
+    this.timer = setTimeout(async () => {
+      try { await this.requestStatus() } catch (error) {
+        if (!this.controller?.signal.aborted) logger.warn('WatchService', 'Watch status refresh failed', { error: String(error) })
+      } finally { this.schedulePoll(controller) }
+    }, 2000)
+    this.timer.unref()
   }
 
-  private httpGet(path: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const url = `${this.baseUrl}${path}`
-      http.get(url, (res) => {
-        let data = ''
-        res.on('data', (chunk: Buffer) => { data += chunk.toString() })
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(data))
-          } catch {
-            resolve(data)
-          }
-        })
-      }).on('error', reject)
-    })
-  }
-
-  private httpPost(path: string, body?: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const url = new URL(`${this.baseUrl}${path}`)
-      const postData = body ? JSON.stringify(body) : ''
-      const req = http.request(
-        {
-          hostname: url.hostname,
-          port: url.port,
-          path: url.pathname,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
-        },
-        (res) => {
-          let data = ''
-          res.on('data', (chunk: Buffer) => { data += chunk.toString() })
-          res.on('end', () => {
-            try { resolve(JSON.parse(data)) } catch { resolve(data) }
-          })
-        },
-      )
-      req.on('error', reject)
-      if (postData) req.write(postData)
-      req.end()
-    })
-  }
-
+  /** Disposing a status subscriber must not stop the repository's watcher. */
   dispose(): void {
-    this.stop()
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = undefined
+    this.controller?.abort()
+    this.controller = undefined
   }
 }

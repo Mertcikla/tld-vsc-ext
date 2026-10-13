@@ -1,6 +1,8 @@
 import * as assert from 'assert'
 import * as path from 'path'
 import * as vscode from 'vscode'
+import * as fs from 'fs'
+import type { DataSource } from '../../src/datasource/DataSource'
 
 type PostedWebviewMessage = {
   diagramId: number
@@ -85,11 +87,11 @@ async function runSourceLinkJumpTest(workspaceRoot: string): Promise<void> {
     symbolKind: 'Function',
   })
 
-  const editor = vscode.window.activeTextEditor
-  assert.ok(editor, 'expected a source editor to be active')
-  await sleep(3000)
-  assert.strictEqual(path.normalize(editor.document.uri.fsPath), path.join(workspaceRoot, 'src', 'sample.ts'))
-  assert.strictEqual(editor.selection.active.line, 0, 'expected source jump to resolve the alphaJump symbol line')
+  await eventually('source editor focused at alphaJump', () => {
+    const editor = vscode.window.activeTextEditor
+    return editor && path.normalize(editor.document.uri.fsPath) === path.join(workspaceRoot, 'src', 'sample.ts')
+      && editor.selection.active.line === 0 ? true : undefined
+  })
 }
 
 async function runCodeLensJumpTest(): Promise<void> {
@@ -126,6 +128,75 @@ export async function run(): Promise<void> {
   const mode = await vscode.commands.executeCommand<string | undefined>('tldiagram.test.waitForReady')
   assert.strictEqual(mode, 'local', 'expected extension to connect to local tld mode')
 
+  const localState = () => vscode.commands.executeCommand<{
+    baseUrl: string; status: { active: boolean }; diagrams: unknown[]; elements: unknown[]
+  }>('tldiagram.test.getLocalState')
+  const before = await localState()
+  assert.ok(before?.status.active, 'expected automatic repository watching')
+  assert.ok(before.diagrams.length > 0 && before.elements.length > 0, 'expected indexed diagrams and elements')
+  await vscode.commands.executeCommand('tldiagram.stopWatch')
+  const stopped = await localState()
+  assert.strictEqual(stopped?.status.active, false, 'expected repository watcher to stop')
+  assert.strictEqual(stopped?.baseUrl, before.baseUrl, 'stopping watch must retain the API server')
+  assert.ok(stopped!.diagrams.length > 0, 'diagrams must remain accessible after stopping watch')
+  await vscode.commands.executeCommand('tldiagram.startWatch')
+  assert.strictEqual((await localState())?.status.active, true, 'expected repository watcher to restart')
+
+  const dataSource = await vscode.commands.executeCommand<DataSource>('tldiagram.test.getDataSource')
+  assert.ok(dataSource)
+  const created = await dataSource.createDiagram('Compatibility test')
+  assert.ok(created.id > 0, 'expected diagram creation on an existing workspace')
+  await dataSource.renameDiagram(created.id, 'Compatibility renamed')
+  assert.ok((await dataSource.listDiagrams()).some((view) => view.id === created.id && view.name === 'Compatibility renamed'))
+  assert.strictEqual(await dataSource.getViewMarkdown(created.id), null, 'new diagrams have no linked markdown')
+  const markdown = await fetch(`${before.baseUrl}/api/diag.v1.WorkspaceService/CreateViewMarkdown`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ viewId: created.id, fileName: 'compatibility.md', initialContent: '# Initial note' }),
+  })
+  assert.ok(markdown.ok, `could not create markdown: ${await markdown.text()}`)
+  await dataSource.saveViewMarkdown(created.id, '# Compatibility note')
+  assert.strictEqual((await dataSource.getViewMarkdown(created.id))?.content, '# Compatibility note')
+  await dataSource.deleteDiagram(created.id)
+  assert.ok(!(await dataSource.listDiagrams()).some((view) => view.id === created.id), 'expected diagram deletion')
+
+  const updated = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => { subscription.dispose(); reject(new Error('Live file changes timed out')) }, 90000)
+    const subscription = dataSource.onWatchEvent((event) => {
+      if (event.type === 'representation.updated' && event.data?.diffs?.some((diff: { name: string }) => diff.name === 'src/sample.ts')) {
+        clearTimeout(timeout)
+        subscription.dispose()
+        resolve()
+      }
+    })
+  })
+  fs.appendFileSync(path.join(workspaceRoot, 'src', 'sample.ts'), '\nexport const compatibilityChange = 1\n')
+  await updated
+  const changeCommand = await vscode.commands.executeCommand<vscode.Command>('tldiagram.test.getWatchChangeCommand')
+  assert.strictEqual(changeCommand?.command, 'tldiagram.openRepositoryChange', 'changed file must have a canvas navigation command')
+  const target = changeCommand!.arguments![0] as { repositoryId: string; filePath: string }
+  assert.strictEqual(target.filePath, 'src/sample.ts')
+  await vscode.commands.executeCommand(changeCommand!.command, ...changeCommand!.arguments!)
+  // Host-only CI jobs do not build the shared frontend. Verify real webview
+  // loading whenever its bundle is present (including local packaged builds).
+  if (fs.existsSync(path.join(extension.extensionPath, 'out', 'webview', 'assets', 'index.js'))) {
+    await eventually('repository change webview loads the live map', async () => {
+      const state = await vscode.commands.executeCommand<{ ready: boolean; loaded: boolean; active: boolean; target: { filePath: string } }>(
+        'tldiagram.test.getRepositoryChangeState', target.repositoryId,
+      )
+      return state?.ready && state.loaded && state.active && state.target.filePath === target.filePath ? true : undefined
+    }, 45000)
+  } else {
+    console.log('E2E: webview bundle absent; checking the native change navigation command only')
+  }
+  // Clicking again should reveal the existing repository tab and focus again.
+  await vscode.commands.executeCommand(changeCommand!.command, ...changeCommand!.arguments!)
+  console.log('E2E: Watch Changes opens the repository change canvas')
+  console.log('E2E: live file changes received')
+  await vscode.commands.executeCommand('tldiagram.analyzeFolder', vscode.Uri.file(workspaceRoot))
+  assert.strictEqual(dataSource.getWatchStatus()?.active, true, 'indexing once must resume an active watcher')
+
+  console.log('E2E: indexing and diagram CRUD passed')
   await runSourceLinkJumpTest(workspaceRoot)
   await runCodeLensJumpTest()
+  console.log('E2E: source navigation and CodeLens passed')
 }

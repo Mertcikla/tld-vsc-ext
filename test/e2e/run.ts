@@ -28,8 +28,10 @@ function createFixture(): { workspaceDir: string; env: NodeJS.ProcessEnv; tldPat
   const tempRoot = process.platform === 'win32' ? os.tmpdir() : '/tmp'
   const workspaceDir = fs.mkdtempSync(path.join(tempRoot, 'tld-vsc-e2e-'))
   const tldPath = findTld()
-  const configDir = path.join(workspaceDir, '.tld-config')
-  const dataDir = path.join(workspaceDir, '.tld-data')
+  // Runtime state lives outside the checkout so watch cannot index its own DB.
+  const stateDir = fs.mkdtempSync(path.join(tempRoot, 'tld-vsc-state-'))
+  const configDir = path.join(stateDir, 'config')
+  const dataDir = path.join(stateDir, 'data')
   const srcDir = path.join(workspaceDir, 'src')
   const vscodeDir = path.join(workspaceDir, '.vscode')
 
@@ -51,6 +53,8 @@ function createFixture(): { workspaceDir: string; env: NodeJS.ProcessEnv; tldPat
     ].join('\n'),
   )
 
+  fs.writeFileSync(path.join(workspaceDir, '.gitignore'), '.tld/\n.vscode/\n')
+
   run('git', ['init'], { cwd: workspaceDir })
   run('git', ['config', 'user.email', 'test@example.com'], { cwd: workspaceDir })
   run('git', ['config', 'user.name', 'tlDiagram E2E'], { cwd: workspaceDir })
@@ -62,17 +66,15 @@ function createFixture(): { workspaceDir: string; env: NodeJS.ProcessEnv; tldPat
     TLD_CONFIG_DIR: configDir,
     TLD_DATA_DIR: dataDir,
     TLD_APPLY_TARGET: 'local',
-    TLD_EMBEDDING_PROVIDER: 'local-deterministic-test',
-    TLD_WATCH_LSP_ENABLED: '0',
-    TLD_WATCH_WATCHER: 'poll',
+    TLD_SKIP_STARTUP_UPDATE: '1',
     TLD_UPDATES_AUTO: '0',
     TLDIAGRAM_E2E: '1',
   }
 
   run(tldPath, ['init', workspaceDir], { env })
-  // `tld apply` was removed; `tld analyze` materializes the source tree into
-  // .tld/*.yaml and seeds the local store that `tld watch` serves.
-  run(tldPath, ['analyze', '.'], { cwd: workspaceDir, env })
+  run(tldPath, ['index', '.', '--map'], { cwd: workspaceDir, env })
+  // Keep source navigation deterministic even when map grouping changes.
+  run(tldPath, ['add', 'alphaJump', '--kind', 'function', '--link', 'src/sample.ts#L1', '--target', 'local'], { cwd: workspaceDir, env })
 
   fs.writeFileSync(
     path.join(vscodeDir, 'settings.json'),

@@ -1,3 +1,8 @@
+export interface RepositoryChangeTarget {
+  repositoryId: string
+  filePath: string
+}
+
 export interface WorkspaceSymbol {
   name: string
   kind: string
@@ -7,6 +12,7 @@ export interface WorkspaceSymbol {
 
 export type WebviewToExtensionMessage =
   | { type: 'ready' }
+  | { type: 'repository-change-loaded'; repositoryId: string }
   | {
       type: 'open-file'
       filePath: string

@@ -2,7 +2,7 @@
   "name": "tldiagram",
   "displayName": "tlDiagram",
   "description": "Browse and edit tlDiagram architecture diagrams from VS Code",
-  "version": "0.3.0",
+  "version": "0.3.3",
   "publisher": "tlDiagram-com",
   "repository": "https://github.com/Mertcikla/tld-vsc-ext",
   "icon": "resources/icon.png",
@@ -242,17 +242,17 @@
         "tldiagram.autoStartWatch": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically start tld watch when opening a workspace with .tld/ directory"
+          "description": "Automatically start repository indexing with tld index --watch when opening a workspace with .tld/ directory"
         },
         "tldiagram.watch.host": {
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Host for the local watch/serve server"
+          "description": "Host for the local tld serve server"
         },
         "tldiagram.watch.port": {
           "type": "integer",
           "default": 0,
-          "description": "Port for the local watch/serve server (0 = auto-select free port)"
+          "description": "Port for the local tld serve server (0 = auto-select free port)"
         },
         "tldiagram.uiColorMode": {
           "type": "string",
@@ -337,7 +337,7 @@
           {
             "id": "tldiagram.authoringWorkflows",
             "title": "Choose a workflow",
-            "description": "**Manual** — run `tld serve`, edit diagrams in the browser.\n\n**Analyze** — run `tld analyze` once to index your codebase and enable code↔diagram links.\n\n**Watch** — run `tld watch` for continuous sync as you code.\n\n[Open docs](command:tldiagram.openDocs)",
+            "description": "**Manual** — run `tld serve`, edit diagrams in the browser.\n\n**Analyze** — run `tld index --map` once to index your codebase and enable code↔diagram links.\n\n**Watch** — run `tld index --watch --map` for continuous sync as you code.\n\n[Open docs](command:tldiagram.openDocs)",
             "media": {
               "markdown": "resources/walkthrough/workflows.md"
             }
@@ -373,7 +373,7 @@
   "scripts": {
     "compile:ext": "node esbuild.mjs",
     "compile:e2e": "esbuild test/e2e/suite.ts --bundle --external:vscode --platform=node --format=cjs --outfile=out/e2e/suite.js",
-    "compile:webview": "cd ../tld/frontend && npm run build:vscode",
+    "compile:webview": "node build-webview.mjs",
     "compile": "npm run compile:ext && npm run compile:webview",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run compile && npx @vscode/vsce package",
@@ -382,13 +382,15 @@
     "test:e2e": "npm run compile:ext && npm run compile:e2e && tsx test/e2e/run.ts"
   },
   "dependencies": {
-    "@buf/tldiagramcom_diagram.bufbuild_es": "^2.12.0-20260526031504-0a16dcce736c.1",
+    "@buf/tldiagramcom_diagram.bufbuild_es": "^2.16.0-20261012095416-f5a9ce65b701.1",
     "@bufbuild/protobuf": "^2.11.0",
     "@connectrpc/connect": "^2.1.1",
     "@connectrpc/connect-web": "^2.1.1"
   },
   "devDependencies": {
     "@types/node": "^18.0.0",
+    "@types/react": "^18.3.31",
+    "@types/react-test-renderer": "^18.3.1",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.0.0",
@@ -397,6 +399,8 @@
     "esbuild": "^0.25.0",
     "glob": "^13.0.6",
     "module-alias": "^2.3.4",
+    "react": "^18.3.1",
+    "react-test-renderer": "^18.3.1",
     "tsx": "^4.21.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.9"

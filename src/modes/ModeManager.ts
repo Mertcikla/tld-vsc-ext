@@ -78,7 +78,7 @@ export class ModeManager {
 
   private async disconnectLocal(): Promise<void> {
     if (this.dataSource) {
-      this.dataSource.disconnect()
+      await this.dataSource.disconnect()
       this.dataSource = undefined
     }
   }

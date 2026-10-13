@@ -23,6 +23,8 @@ const options = {
     // matches the workspace-local proto overlay.
     '@buf/tldiagramcom_diagram.bufbuild_es/diag/v1/workspace_service_pb':
       localWorkspaceService,
+    '@buf/tldiagramcom_diagram.bufbuild_es/codeindex/v1/codeindex_pb':
+      path.resolve(__dirname, '../tld/frontend/src/gen/codeindex/v1/codeindex_pb.ts'),
   } : {},
 }
 

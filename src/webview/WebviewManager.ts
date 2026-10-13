@@ -6,8 +6,10 @@ import { getWebviewHtml } from './getWebviewHtml'
 import { MessageRouter } from './MessageRouter'
 import { WorkspaceSymbolService } from './WorkspaceSymbolService'
 import { MarkdownDocumentService } from './MarkdownDocumentService'
+import type { RepositoryChangeTarget } from './vscodeMessages'
 
 export class WebviewManager {
+  private repositoryPanels = new Map<string, { panel: vscode.WebviewPanel; target: RepositoryChangeTarget; ready: boolean; loaded: boolean }>()
   private panels = new Map<number, vscode.WebviewPanel>()
 
   constructor(
@@ -97,6 +99,45 @@ export class WebviewManager {
       markdownSaveSubscription?.dispose()
       this.panels.delete(diagram.id)
     })
+  }
+
+  async openRepositoryChange(target: RepositoryChangeTarget): Promise<void> {
+    const existing = this.repositoryPanels.get(target.repositoryId)
+    if (existing) {
+      existing.target = target
+      existing.panel.reveal(vscode.ViewColumn.One)
+      if (existing.ready) void existing.panel.webview.postMessage({ type: 'focus-repository-change', ...target })
+      return
+    }
+
+    const panel = vscode.window.createWebviewPanel('tldiagram.repositoryChanges', 'Repository Changes', vscode.ViewColumn.One, {
+      enableScripts: true, retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'out', 'webview')],
+    })
+    const state = { panel, target, ready: false, loaded: false }
+    this.repositoryPanels.set(target.repositoryId, state)
+    const router = new MessageRouter()
+    const postMessage = (message: unknown) => { void panel.webview.postMessage(message) }
+    new WorkspaceSymbolService(postMessage, router)
+    this.markdownDocumentService?.registerRouter(router)
+    router.register('ready', () => {
+      state.ready = true
+      postMessage({ type: 'focus-repository-change', ...state.target })
+    })
+    router.register('repository-change-loaded', (message) => {
+      if (message.type === 'repository-change-loaded' && message.repositoryId === state.target.repositoryId) state.loaded = true
+    })
+    const messages = panel.webview.onDidReceiveMessage((message) => { void router.dispatch(message) })
+    panel.onDidDispose(() => {
+      messages.dispose()
+      this.repositoryPanels.delete(target.repositoryId)
+    })
+    panel.webview.html = getWebviewHtml(panel.webview, this.extensionUri, this.serverUrl, undefined, target)
+  }
+
+  getRepositoryChangeState(repositoryId: string): { target: RepositoryChangeTarget; ready: boolean; loaded: boolean; active: boolean } | undefined {
+    const state = this.repositoryPanels.get(repositoryId)
+    return state ? { target: state.target, ready: state.ready, loaded: state.loaded, active: state.panel.active } : undefined
   }
 
   postMessageToDiagram(diagramId: number, message: any): void {

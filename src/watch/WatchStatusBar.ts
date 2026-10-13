@@ -4,15 +4,17 @@ import type { WatchService } from './WatchService'
 
 export class WatchStatusBar {
   private item: vscode.StatusBarItem
+  private readonly subscription: { dispose(): void }
 
   constructor(private readonly watchService: WatchService) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100)
     this.item.name = 'tlDiagram Watch'
     this.item.tooltip = 'tlDiagram Watch Status'
     this.item.command = 'tldiagram.watchQuickActions'
-    this.updateIdle()
+    if (watchService.getStatus().active) this.updateWatching()
+    else this.updateIdle()
 
-    this.watchService.onEvent((event) => {
+    this.subscription = this.watchService.onEvent((event) => {
       switch (event.type) {
         case 'watch.started':
           this.updateWatching(event.data?.watched_files)
@@ -70,6 +72,7 @@ export class WatchStatusBar {
   }
 
   dispose(): void {
+    this.subscription.dispose()
     this.item.dispose()
   }
 }

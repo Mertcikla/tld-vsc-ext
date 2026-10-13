@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import * as crypto from 'crypto'
+import type { RepositoryChangeTarget } from './vscodeMessages'
 
 function generateNonce(): string {
   return crypto.randomBytes(16).toString('hex')
@@ -14,7 +15,8 @@ export function getWebviewHtml(
   webview: vscode.Webview,
   extensionUri: vscode.Uri,
   serverUrl: string,
-  diagramId: number,
+  diagramId?: number,
+  repositoryChange?: RepositoryChangeTarget,
 ): string {
   const scriptUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, 'out', 'webview', 'assets', 'index.js'),
@@ -25,6 +27,7 @@ export function getWebviewHtml(
   const nonce = generateNonce()
   const safeServerUrl = JSON.stringify(serverUrl)
   const safeDiagramId = JSON.stringify(diagramId)
+  const safeRepositoryChange = JSON.stringify(repositoryChange)?.replace(/</g, '\\u003c')
   const config = vscode.workspace.getConfiguration('tldiagram')
   const themePayload = {
     mode: config.get<'vscodeTheme' | 'palette'>('uiColorMode', 'vscodeTheme'),
@@ -48,12 +51,13 @@ export function getWebviewHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'none';
-    script-src 'nonce-${nonce}';
+    script-src ${webview.cspSource} 'nonce-${nonce}';
     style-src ${webview.cspSource} 'unsafe-inline';
     img-src ${imgFontSrc};
     font-src ${imgFontSrc};
     connect-src ${connectSrc};
   ">
+  <meta property="csp-nonce" nonce="${nonce}">
   <link rel="stylesheet" href="${styleUri}">
   <title>tlDiagram</title>
 </head>
@@ -62,6 +66,7 @@ export function getWebviewHtml(
   <script nonce="${nonce}">
     window.__TLD_SERVER_URL__ = ${safeServerUrl};
     window.__TLD_DIAGRAM_ID__ = ${safeDiagramId};
+    window.__TLD_REPOSITORY_CHANGE__ = ${safeRepositoryChange};
     window.__TLD_VSCODE_THEME__ = ${safeThemePayload};
     window.__TLD_VSCODE__ = true;
     window.__TLD_VSCODE_API__ = acquireVsCodeApi();

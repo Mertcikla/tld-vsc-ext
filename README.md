@@ -15,7 +15,7 @@ The extension contributes views in the **tlDiagram** activity bar container:
 |---|---|
 | **Diagrams** | Diagram hierarchy, including parent/child relationships, with create, rename, delete, open, and open-in-browser actions |
 | **Element Inventory** | Reusable elements grouped by kind, with an **Add to Diagram** action that places the element into the active diagram |
-| **Watch Changes** | Pending watch diffs produced by `tld watch` (local mode only) |
+| **Watch Changes** | Live file changes produced by `tld index --watch`; click a file to open the repository change canvas and focus its change (local mode only) |
 
 ### Workspace source linking
 Inside the webview, the source picker browses workspace files and asks VS Code for symbols in the selected file. Links are stored in the same shape the web app uses, so they work everywhere.
@@ -23,7 +23,7 @@ Inside the webview, the source picker browses workspace files and asks VS Code f
 CodeLens and `Ctrl/Cmd+T` symbol search jump from source symbols to their diagram, and **Open in Editor** jumps back from a diagram element to its source.
 
 ### Local CLI mode
-The extension starts `tld watch` for the current workspace and talks to the local CLI HTTP API. Set `tlDiagram › Cli Path` if `tld` is not on `PATH`. Run **tlDiagram: Analyze Folder** to index a codebase, or **tlDiagram: Start Watching** for continuous sync.
+Requires **tld v2.4.3 or newer**. The extension starts `tld serve --foreground` for the current workspace and talks to its ConnectRPC API. Repository indexing runs separately through `tld index --watch --map`; stopping indexing keeps diagrams available. Set `tlDiagram › Cli Path` if `tld` is not on `PATH`. Run **tlDiagram: Analyze Folder** to index a codebase, or **tlDiagram: Start Watching** for continuous sync.
 
 ### Logging
 All extension activity is written to the **tlDiagram** output channel. The verbosity is controlled by `tldiagram.logLevel`.
@@ -39,8 +39,8 @@ All extension activity is written to the **tlDiagram** output channel. The verbo
 | `Rename Diagram` / `Delete Diagram` | Diagram item context menu | Rename or delete the selected diagram |
 | `Add to Diagram` | Element Inventory item context menu | Place the selected element into the active diagram |
 | `Go to Diagram` | Editor / Explorer context menu, CodeLens | Open the diagram that contains the current symbol |
-| `tlDiagram: Analyze Folder` | Explorer folder context menu | Run `tld init` + `tld analyze` for the folder |
-| `tlDiagram: Start Watching` / `Stop Watching` | Command palette, status bar | Control the `tld watch` pipeline |
+| `tlDiagram: Analyze Folder` | Explorer folder context menu | Run `tld index <folder> --map` for the folder |
+| `tlDiagram: Start Watching` / `Stop Watching` | Command palette, status bar | Control repository indexing through the local server |
 | `tlDiagram: Show Watch Changes` | Command palette | Reveal the Watch Changes view |
 | `tlDiagram: Install or Update CLI` | Command palette | Install the CLI or run `tld version update` |
 | `tlDiagram: Show Logs` | Command palette | Open the tlDiagram output channel |

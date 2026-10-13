@@ -1,4 +1,4 @@
-import { createClient, ConnectError } from '@connectrpc/connect'
+import { createClient, ConnectError, Code } from '@connectrpc/connect'
 import { createConnectTransport } from '@connectrpc/connect-web'
 import { toJson } from '@bufbuild/protobuf'
 import { logger } from '../logger'
@@ -147,7 +147,11 @@ export class ExtensionApiClient {
 
   async getViewMarkdown(viewId: number): Promise<{ markdown: ViewMarkdownDocument; content: string } | null> {
     logger.debug('ExtensionApiClient', 'getViewMarkdown', { viewId })
-    const res = await this.workspaceClient.getViewMarkdown({ viewId })
+    let res
+    try { res = await this.workspaceClient.getViewMarkdown({ viewId }) } catch (error) {
+      if (error instanceof ConnectError && error.code === Code.NotFound) return null
+      throw error
+    }
     const json = j<{
       markdown?: {
         path?: string
@@ -187,7 +191,31 @@ export class ExtensionApiClient {
 
   async createDiagram(name: string, parentDiagramId?: number): Promise<Diagram> {
     logger.info('ExtensionApiClient', 'createDiagram', { name, parentDiagramId })
-    const res = await this.workspaceClient.createView({ name, ownerElementId: parentDiagramId })
+    const { views } = await this.workspaceClient.listViews({})
+    // v2.4.3 allows one root view; further diagrams are owned by elements.
+    const parent = parentDiagramId !== undefined
+      ? views.find((view) => view.id === parentDiagramId)
+      : views.find((view) => !view.ownerElementId) ?? views[0]
+    if (parentDiagramId !== undefined && !parent) throw new Error('Parent diagram not found')
+    let ownerElementId: number | undefined
+    if (parent) {
+      const owner = await this.createElement({ name, type: 'Component' })
+      ownerElementId = owner.id
+    }
+    let res
+    try {
+      if (parent && ownerElementId) {
+        await this.addElementToDiagram(parent.id, ownerElementId, 0, 0)
+      }
+      res = await this.workspaceClient.createView({ name, ownerElementId, orgId: '11111111-1111-1111-1111-111111111111' })
+    } catch (error) {
+      if (ownerElementId) {
+        try { await this.workspaceClient.deleteElement({ elementId: ownerElementId, orgId: '11111111-1111-1111-1111-111111111111' }) } catch (cleanupError) {
+          logger.warn('ExtensionApiClient', 'Could not remove failed diagram owner', { error: String(cleanupError) })
+        }
+      }
+      throw error
+    }
     const json = j<{ view: Diagram }>(CreateViewResponseSchema, res)
     logger.info('ExtensionApiClient', 'createDiagram: created', { id: json.view.id, name: json.view.name })
     return json.view

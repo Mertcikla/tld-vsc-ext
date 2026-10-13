@@ -1,5 +1,7 @@
 import * as cp from 'child_process'
 import * as http from 'http'
+import * as fs from 'fs'
+import * as path from 'path'
 import * as vscode from 'vscode'
 import { logger } from '../logger'
 import { ExtensionApiClient, type Diagram, type DiagElementData } from '../api/ExtensionApiClient'
@@ -29,7 +31,7 @@ function waitForReady(baseUrl: string, maxRetries = 30, intervalMs = 500): Promi
     let attempts = 0
     const check = () => {
       attempts++
-      http.get(`${baseUrl}/api/ready`, (res) => {
+      const request = http.get(`${baseUrl}/api/ready`, (res) => {
         if (res.statusCode === 200) {
           res.resume()
           resolve()
@@ -41,6 +43,7 @@ function waitForReady(baseUrl: string, maxRetries = 30, intervalMs = 500): Promi
         logger.trace('LocalDataSource', 'waitForReady attempt failed', { attempt: attempts, error: e.message })
         retry()
       })
+      request.setTimeout(1000, () => request.destroy(new Error('Readiness request timed out')))
     }
     const retry = () => {
       if (attempts >= maxRetries) {
@@ -57,7 +60,7 @@ export class LocalDataSource implements DataSource {
   readonly mode = 'local' as const
 
   private client: ExtensionApiClient | null = null
-  private watchProcess: cp.ChildProcess | null = null
+  private serverProcess: cp.ChildProcess | null = null
   private port: number = 0
   private watchService: WatchService | null = null
   private reconnectPromise: Promise<void> | null = null
@@ -74,45 +77,51 @@ export class LocalDataSource implements DataSource {
   async connect(): Promise<void> {
     this.stopping = false
     const generation = ++this.spawnGeneration
-    const port = this.configuredPort > 0 ? this.configuredPort : await getFreePort()
-    logger.info('LocalDataSource', 'Starting tld watch', {
+    const port = this.port || (this.configuredPort > 0 ? this.configuredPort : await getFreePort())
+    logger.info('LocalDataSource', 'Starting tld serve', {
       tldPath: this.tldPath,
       workspaceRoot: this.workspaceRoot,
       host: this.host,
       port,
     })
 
-    this.watchProcess = cp.spawn(this.tldPath, [
-      'watch',
-      this.workspaceRoot,
+    this.serverProcess = cp.spawn(this.tldPath, [
+      'serve', '--foreground',
+      '--workspace', this.workspaceRoot,
       '--host', this.host,
       '--port', String(port),
     ], {
-      // stdin must be a pipe, not 'ignore': 'ignore' attaches /dev/null (NUL on
-      // Windows), which is a character device and makes the CLI treat stdin as
-      // interactive, so its LSP confirmation prompt reads EOF and aborts watch.
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        // Server-managed watchers must use the explicitly selected CLI version.
+        PATH: `${path.dirname(this.tldPath)}${path.delimiter}${process.env.PATH ?? ''}`,
+        TLD_SKIP_STARTUP_UPDATE: '1',
+      },
       cwd: this.workspaceRoot,
     })
 
     let stderr = ''
-    this.watchProcess.stderr?.on('data', (d: Buffer) => {
+    this.serverProcess.on('error', (error) => {
+      stderr = error.message
+      logger.error('LocalDataSource', 'Could not launch tld serve', { error: error.message })
+    })
+    this.serverProcess.stderr?.on('data', (d: Buffer) => {
       const chunk = d.toString()
       stderr = (stderr + chunk).slice(-8000)
-      logger.debug('LocalDataSource', 'tld watch stderr', { line: chunk.trim() })
+      logger.debug('LocalDataSource', 'tld serve stderr', { line: chunk.trim() })
     })
-    this.watchProcess.stdout?.on('data', (d: Buffer) => {
-      logger.trace('LocalDataSource', 'tld watch stdout', { line: d.toString().trim() })
+    this.serverProcess.stdout?.on('data', (d: Buffer) => {
+      logger.trace('LocalDataSource', 'tld serve stdout', { line: d.toString().trim() })
     })
 
-    this.watchProcess.on('exit', (code, signal) => {
-      logger.info('LocalDataSource', 'tld watch exited', { code, signal })
+    this.serverProcess.on('exit', (code, signal) => {
+      logger.info('LocalDataSource', 'tld serve exited', { code, signal })
       if (generation !== this.spawnGeneration) return
-      this.watchProcess = null
+      this.serverProcess = null
       if (this.stopping || code === 0) return
       const tail = stderr.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-10).join('\n')
-      logger.error('LocalDataSource', 'tld watch exited unexpectedly', { code, signal, stderr: tail })
+      logger.error('LocalDataSource', 'tld serve exited unexpectedly', { code, signal, stderr: tail })
       const summary = tail.split('\n').slice(-1)[0] ?? ''
       void vscode.window.showErrorMessage(
         `tlDiagram: the tld CLI stopped unexpectedly (exit ${code ?? signal}).${summary ? ` ${summary}` : ''} See the "tlDiagram" output channel for details.`,
@@ -123,36 +132,49 @@ export class LocalDataSource implements DataSource {
     try {
       await waitForReady(baseUrl)
     } catch (e) {
-      logger.error('LocalDataSource', 'tld watch failed to start', {
+      logger.error('LocalDataSource', 'tld serve failed to start', {
         error: String(e),
         stderr: stderr.slice(-500),
       })
-      this.killWatch()
-      throw new Error(`tld watch failed to start: ${stderr.slice(-200)}`)
+      await this.killServer()
+      throw new Error(`tld serve failed to start: ${stderr.slice(-200)}`)
     }
 
     this.port = port
     this.client = new ExtensionApiClient(baseUrl)
-    this.watchService = new WatchService(baseUrl, this.workspaceRoot)
-    await this.watchService.start()
+    this.watchService ??= new WatchService(baseUrl, this.workspaceRoot)
+    try { await this.watchService.initialize() } catch (error) {
+      await this.disconnect()
+      throw error
+    }
+    const autoStart = vscode.workspace.getConfiguration('tldiagram').get<boolean>('autoStartWatch', true)
+    if (autoStart && fs.existsSync(path.join(this.workspaceRoot, '.tld'))) {
+      try { await this.watchService.start() } catch (error) {
+        logger.warn('LocalDataSource', 'Automatic indexing could not start', { error: String(error) })
+        void vscode.window.showWarningMessage(`tlDiagram: automatic indexing could not start: ${String(error)}`)
+      }
+    }
     logger.info('LocalDataSource', 'Connected', { baseUrl })
   }
 
-  disconnect(): void {
+  async disconnect(): Promise<void> {
     this.stopping = true
-    void this.watchService?.stop()
+    this.watchService?.dispose()
     this.watchService = null
-    this.killWatch()
+    await this.killServer()
     this.client = null
     logger.info('LocalDataSource', 'Disconnected')
   }
 
-  private killWatch(): void {
-    if (this.watchProcess) {
-      this.watchProcess.kill()
-      this.watchProcess = null
-      this.port = 0
-    }
+  private async killServer(): Promise<void> {
+    const child = this.serverProcess
+    if (!child || child.exitCode !== null || child.signalCode !== null) return
+    this.serverProcess = null
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => { child.kill('SIGKILL') }, 10000)
+      child.once('close', () => { clearTimeout(timer); resolve() })
+      child.kill()
+    })
   }
 
   get baseUrl(): string {
@@ -179,16 +201,11 @@ export class LocalDataSource implements DataSource {
   private async restart(): Promise<void> {
     if (!this.reconnectPromise) {
       this.reconnectPromise = (async () => {
-        logger.warn('LocalDataSource', 'Restarting local tld watch server')
-        try {
-          await this.watchService?.stop()
-        } catch (e) {
-          logger.warn('LocalDataSource', 'Failed to stop watch service during restart', { error: String(e) })
-        }
-        this.watchService = null
+        logger.warn('LocalDataSource', 'Restarting local tld serve server')
+        this.watchService?.dispose()
         this.client = null
         this.stopping = true
-        this.killWatch()
+        await this.killServer()
         await this.connect()
       })().finally(() => {
         this.reconnectPromise = null
@@ -252,23 +269,13 @@ export class LocalDataSource implements DataSource {
     return true
   }
 
-  async startWatch(path: string): Promise<void> {
-    if (!this.watchProcess || !this.watchService) {
-      await this.connect()
-      return
-    }
-    if (this.watchService) {
-      await this.watchService.start()
-    }
+  async startWatch(repoPath: string): Promise<void> {
+    if (!this.serverProcess || !this.watchService) await this.connect()
+    await this.watchService!.start(repoPath)
   }
 
   async stopWatch(): Promise<void> {
-    if (this.watchService) {
-      await this.watchService.stop()
-    }
-    this.watchService = null
-    this.client = null
-    this.killWatch()
+    await this.watchService?.stop()
   }
 
   getWatchStatus(): WatchStatus | null {
